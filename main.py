@@ -99,11 +99,10 @@ def get_zhihu_hot():
         }]
 
 def get_newrank_low_fans():
-    """抓取新榜低粉爆文榜TOP10 - 网络请求版"""
+    """抓取新榜低粉爆文榜TOP10 - 调试版"""
     try:
         import requests
         import os
-        import re
         
         print("开始抓取新榜低粉爆文榜...")
         
@@ -118,7 +117,7 @@ def get_newrank_low_fans():
         
         print("使用requests直接访问...")
         
-        # 设置请求头
+        # 设置更完整的请求头
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -127,18 +126,44 @@ def get_newrank_low_fans():
             'Connection': 'keep-alive',
             'Upgrade-Insecure-Requests': '1',
             'Cookie': newrank_cookie,
-            'Referer': 'https://www.newrank.cn/'
+            'Referer': 'https://www.newrank.cn/',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'same-origin'
         }
         
-        # 直接请求页面
-        response = requests.get(
+        # 创建会话以保持Cookie
+        session = requests.Session()
+        session.headers.update(headers)
+        
+        # 首先访问首页建立会话
+        print("访问首页建立会话...")
+        home_response = session.get('https://www.newrank.cn/', timeout=10)
+        print(f"首页状态码: {home_response.status_code}")
+        
+        # 然后访问目标页面
+        print("访问低粉爆文榜页面...")
+        response = session.get(
             'https://www.newrank.cn/hotInfo?platform=GZH&rankType=3',
-            headers=headers,
             timeout=30
         )
         
         print(f"请求状态码: {response.status_code}")
         print(f"响应长度: {len(response.text)}")
+        
+        # 调试：查看响应内容的前500字符
+        print("=== 响应内容预览 ===")
+        print(response.text[:500])
+        print("===================")
+        
+        # 检查关键内容
+        has_low_fans = '低粉爆文' in response.text
+        has_login = '登录' in response.text
+        has_register = '注册' in response.text
+        
+        print(f"包含'低粉爆文': {has_low_fans}")
+        print(f"包含'登录': {has_login}")
+        print(f"包含'注册': {has_register}")
         
         if response.status_code != 200:
             return [{
@@ -146,27 +171,29 @@ def get_newrank_low_fans():
                 'url': 'https://www.newrank.cn/hotInfo?platform=GZH&rankType=3'
             }]
         
-        # 检查是否登录成功
-        if '低粉爆文' not in response.text:
+        # 更精确的登录状态判断
+        if not has_low_fans:
             return [{
-                'title': '⚠️ Cookie可能已过期',
+                'title': '⚠️ 页面不包含低粉爆文内容',
                 'url': 'https://www.newrank.cn/hotInfo?platform=GZH&rankType=3'
             }]
         
-        if '登录' in response.text and '注册' in response.text:
+        if has_login and has_register:
             return [{
-                'title': '⚠️ 需要重新登录',
+                'title': '⚠️ Cookie可能已过期或无效',
                 'url': 'https://www.newrank.cn/hotInfo?platform=GZH&rankType=3'
             }]
         
         print("✅ 登录成功，开始解析页面内容...")
         
-        # 简单的HTML解析来提取文章标题和链接
+        # 简单的HTML解析
         import re
         
-        # 查找文章标题和链接的模式
-        article_pattern = r'<a[^>]*href="([^"]*)"[^>]*>([^<]*)</a>'
+        # 查找所有链接和标题
+        article_pattern = r'<a\s+[^>]*href="([^"]*)"[^>]*>([^<]+)</a>'
         matches = re.findall(article_pattern, response.text)
+        
+        print(f"找到 {len(matches)} 个链接")
         
         newrank_list = []
         seen_titles = set()
@@ -184,7 +211,8 @@ def get_newrank_low_fans():
                 seen_titles.add(title_key)
                 
                 # 过滤掉明显不是文章的标题
-                if any(keyword in title for keyword in ['登录', '注册', '首页', '新榜', '报告', '白皮书']):
+                exclude_keywords = ['登录', '注册', '首页', '新榜', '报告', '白皮书', '热门', '榜单', '小工具']
+                if any(keyword in title for keyword in exclude_keywords):
                     continue
                 
                 # 构建完整URL
@@ -203,7 +231,7 @@ def get_newrank_low_fans():
         
         if not newrank_list:
             return [{
-                'title': '⚠️ 登录成功但解析失败',
+                'title': '⚠️ 登录成功但未找到有效文章',
                 'url': 'https://www.newrank.cn/hotInfo?platform=GZH&rankType=3'
             }]
         
