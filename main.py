@@ -97,9 +97,8 @@ def get_zhihu_hot():
             'title': '⚠️ 知乎热榜获取出错',
             'url': 'https://www.zhihu.com/hot'
         }]
-
 def get_newrank_low_fans():
-    """抓取新榜低粉爆文榜TOP10 - 修复版"""
+    """抓取新榜低粉爆文榜TOP10 - 直接定位标题版"""
     try:
         from playwright.sync_api import sync_playwright
         
@@ -117,97 +116,94 @@ def get_newrank_low_fans():
             
             # 等待页面加载
             print("等待页面加载...")
-            page.wait_for_timeout(8000)
+            page.wait_for_timeout(10000)  # 增加等待时间
             
-            # 更精准的选择器策略
-            print("尝试精准选择器...")
+            # 方法1：直接查看页面中所有的h1-h6标题和带有title类的元素
+            print("=== 方法1：查找所有标题元素 ===")
+            title_elements = []
             
-            # 方案1：尝试直接定位文章列表容器
-            article_container_selectors = [
-                '.rank-list',
-                '.list-container',
-                '.hot-list',
-                '.content-list',
-                '.weui-panel',
-                '[class*="rank"]',
-                '[class*="list"]'
-            ]
+            # 查找所有可能的标题标签
+            for tag in ['h1', 'h2', 'h3', 'h4', 'h5', 'h6']:
+                elements = page.query_selector_all(tag)
+                for elem in elements:
+                    text = elem.inner_text().strip()
+                    if len(text) > 5 and len(text) < 100:
+                        title_elements.append(('tag:'+tag, text, elem))
             
-            articles = []
-            for container_selector in article_container_selectors:
-                container = page.query_selector(container_selector)
-                if container:
-                    print(f"找到容器: {container_selector}")
-                    # 在容器内查找文章项
-                    items = container.query_selector_all('[class*="item"], [class*="article"], [class*="media"]')
-                    if items:
-                        articles = items
-                        break
+            # 查找所有包含"title"类的元素
+            title_class_elements = page.query_selector_all('[class*="title"]')
+            for elem in title_class_elements:
+                text = elem.inner_text().strip()
+                if len(text) > 5 and len(text) < 100:
+                    title_elements.append(('class:title', text, elem))
             
-            # 方案2：如果没找到容器，直接搜索包含特定文本的元素
-            if not articles:
-                print("尝试搜索包含公众号名的元素...")
-                # 查找可能包含公众号名称或文章标题的元素
-                potential_elements = page.query_selector_all('[class*="name"], [class*="title"], [class*="account"]')
-                articles = [elem for elem in potential_elements if len(elem.inner_text().strip()) > 2]
+            print(f"找到 {len(title_elements)} 个标题元素:")
+            for i, (source, text, elem) in enumerate(title_elements[:10]):  # 只显示前10个
+                print(f"  {i+1}. [{source}] {text}")
             
-            # 方案3：最后的手段 - 查找所有包含链接且有较长文本的元素
-            if not articles:
-                print("使用最终方案：查找所有链接...")
-                all_links = page.query_selector_all('a')
-                articles = []
-                for link in all_links:
-                    text = link.inner_text().strip()
-                    href = link.get_attribute('href') or ''
-                    # 只保留有较长文本且可能是文章链接的元素
-                    if len(text) > 4 and ('article' in href or 'detail' in href or '/p/' in href):
-                        articles.append(link)
+            # 方法2：查找所有链接，但只保留那些看起来像文章标题的
+            print("\n=== 方法2：查找文章标题链接 ===")
+            all_links = page.query_selector_all('a')
+            article_links = []
             
-            print(f"最终找到 {len(articles)} 个候选元素")
+            for link in all_links:
+                text = link.inner_text().strip()
+                href = link.get_attribute('href') or ''
+                
+                # 过滤条件：文本长度合适，链接包含文章标识
+                if (len(text) > 8 and len(text) < 80 and 
+                    ('article' in href or 'detail' in href or '/p/' in href or 'wx.' in href)):
+                    
+                    # 排除导航类文本
+                    if not any(keyword in text for keyword in ['登录', '注册', '首页', '下载', '更多', '查看', '热门', '榜单']):
+                        article_links.append((text, href, link))
             
-            # 提取前10个有效元素的数据
+            print(f"找到 {len(article_links)} 个文章链接:")
+            for i, (text, href, link) in enumerate(article_links[:10]):
+                print(f"  {i+1}. {text} -> {href[:50]}...")
+            
+            # 优先使用方法2的结果（文章链接），如果没有则用方法1
+            if article_links:
+                print("使用文章链接数据...")
+                source_data = article_links
+            else:
+                print("使用标题元素数据...")
+                source_data = [(text, '', elem) for (source, text, elem) in title_elements]
+            
+            # 提取前10个
             count = 0
-            for i, article in enumerate(articles):
+            seen_titles = set()
+            
+            for text, href, element in source_data:
                 if count >= 10:
                     break
                     
-                try:
-                    text_content = article.inner_text().strip()
-                    
-                    # 过滤条件：文本长度合适，且不包含明显不是文章标题的文本
-                    if (len(text_content) < 5 or len(text_content) > 100 or 
-                        any(keyword in text_content for keyword in ['登录', '注册', '首页', '热门', '搜索', '下载'])):
-                        continue
-                    
-                    # 获取链接
-                    href = article.get_attribute('href') or ''
-                    
-                    # 构建完整链接
-                    if href and not href.startswith('http'):
-                        full_url = f"https://www.newrank.cn{href}" if href.startswith('/') else f"https://www.newrank.cn/{href}"
-                    else:
-                        full_url = href if href else 'https://www.newrank.cn'
-                    
-                    newrank_list.append({
-                        'title': text_content,
-                        'url': full_url
-                    })
-                    
-                    print(f"新榜第{count+1}条: {text_content[:30]}...")
-                    count += 1
-                    
-                except Exception as e:
-                    print(f"解析元素 {i} 出错: {e}")
+                # 去重
+                if text in seen_titles:
                     continue
+                seen_titles.add(text)
+                
+                # 构建完整链接
+                if href and not href.startswith('http'):
+                    full_url = f"https://www.newrank.cn{href}" if href.startswith('/') else f"https://www.newrank.cn/{href}"
+                else:
+                    full_url = href if href else 'https://www.newrank.cn'
+                
+                newrank_list.append({
+                    'title': text,
+                    'url': full_url
+                })
+                
+                print(f"新榜第{count+1}条: {text}")
+                count += 1
             
             browser.close()
         
         print(f"成功获取新榜数据 {len(newrank_list)} 条")
         
-        # 如果没有找到有效数据，返回提示
         if not newrank_list:
             return [{
-                'title': '⚠️ 找到元素但无法解析内容，可能需要人工查看页面结构',
+                'title': '⚠️ 无法找到文章标题元素',
                 'url': 'https://www.newrank.cn/hotInfo?platform=GZH&rankType=3'
             }]
         
@@ -219,6 +215,7 @@ def get_newrank_low_fans():
             'title': '⚠️ 新榜低粉爆文榜获取失败',
             'url': 'https://www.newrank.cn/hotInfo?platform=GZH&rankType=3'
         }]
+
 
 def send_to_feishu(weibo_data, zhihu_data, newrank_data):
     """发送消息到飞书"""
