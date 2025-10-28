@@ -68,25 +68,25 @@ def get_zhihu_hot():
             data = response.json()
             hot_list = []
             for item in data['data']:
-            target = item.get('target', {})
-            title = target.get('title', '无标题')
-            url = target.get('url', '')
-    
-    # 修复知乎链接 - 新版本
-    if url and 'api.zhihu.com' in url:
-        # 从API链接中提取问题ID，然后构建正确的知乎链接
-        if '/questions/' in url:
-            question_id = url.split('/questions/')[-1]
-            url = f"https://www.zhihu.com/question/{question_id}"
-        else:
-            # 如果无法提取问题ID，使用备用方案
-            url = "https://www.zhihu.com/hot"
-    elif url and 'zhihu.com' not in url:
-        # 原来的备用方案
-        url = f"https://www.zhihu.com/question/{target.get('id', '')}"
-    elif not url:
-        # 如果没有链接，指向知乎热榜
-        url = "https://www.zhihu.com/hot"
+                target = item.get('target', {})
+                title = target.get('title', '无标题')
+                url = target.get('url', '')
+                
+                # 修复知乎链接 - 新版本
+                if url and 'api.zhihu.com' in url:
+                    # 从API链接中提取问题ID，然后构建正确的知乎链接
+                    if '/questions/' in url:
+                        question_id = url.split('/questions/')[-1]
+                        url = f"https://www.zhihu.com/question/{question_id}"
+                    else:
+                        # 如果无法提取问题ID，使用备用方案
+                        url = "https://www.zhihu.com/hot"
+                elif url and 'zhihu.com' not in url:
+                    # 原来的备用方案
+                    url = f"https://www.zhihu.com/question/{target.get('id', '')}"
+                elif not url:
+                    # 如果没有链接，指向知乎热榜
+                    url = "https://www.zhihu.com/hot"
                 
                 hot_list.append({
                     'title': title,
