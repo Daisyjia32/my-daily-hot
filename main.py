@@ -7,7 +7,7 @@ from urllib.parse import quote
 FEISHU_WEBHOOK_URL = os.environ['FEISHU_WEBHOOK_URL']
 
 def get_weibo_hot():
-    """抓取微博热搜榜 - 修复版"""
+    """抓取微博热搜榜"""
     try:
         url = "https://weibo.com/ajax/side/hotSearch"
         headers = {
@@ -23,24 +23,20 @@ def get_weibo_hot():
             hot_list = []
             count = 0
             
-            # 改进的过滤逻辑：只取有真实排名的热搜
             for item in data['data']['realtime']:
-                # 关键过滤条件：必须有真实排名且不是广告
                 if item.get('realpos') and item.get('realpos', 0) > 0 and item.get('flag') != 2:
-                    # 修复链接：使用正确的微博搜索URL
                     search_word = quote(item['word'])
                     weibo_url = f"https://s.weibo.com/weibo?q={search_word}"
                     
                     hot_list.append({
                         'title': item['note'],
                         'url': weibo_url,
-                        'rank': item['realpos']  # 添加排名信息用于排序
+                        'rank': item['realpos']
                     })
                     count += 1
                     if count >= 10:
                         break
             
-            # 按真实排名排序
             hot_list.sort(key=lambda x: x['rank'])
             print(f"过滤后的微博热搜数量: {len(hot_list)}")
             return hot_list
@@ -52,9 +48,8 @@ def get_weibo_hot():
         return []
 
 def get_zhihu_hot():
-    """抓取知乎热榜 - 使用备用方案"""
+    """抓取知乎热榜"""
     try:
-        # 方案1：尝试使用免认证的第三方接口
         url = "https://api.zhihu.com/topstory/hot-list?limit=10"
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -62,7 +57,7 @@ def get_zhihu_hot():
         }
         
         response = requests.get(url, headers=headers, timeout=10)
-        print(f"知乎备用接口状态码: {response.status_code}")
+        print(f"知乎接口状态码: {response.status_code}")
         
         if response.status_code == 200:
             data = response.json()
@@ -72,20 +67,16 @@ def get_zhihu_hot():
                 title = target.get('title', '无标题')
                 url = target.get('url', '')
                 
-                # 修复知乎链接 - 新版本
+                # 修复知乎链接
                 if url and 'api.zhihu.com' in url:
-                    # 从API链接中提取问题ID，然后构建正确的知乎链接
                     if '/questions/' in url:
                         question_id = url.split('/questions/')[-1]
                         url = f"https://www.zhihu.com/question/{question_id}"
                     else:
-                        # 如果无法提取问题ID，使用备用方案
                         url = "https://www.zhihu.com/hot"
                 elif url and 'zhihu.com' not in url:
-                    # 原来的备用方案
                     url = f"https://www.zhihu.com/question/{target.get('id', '')}"
                 elif not url:
-                    # 如果没有链接，指向知乎热榜
                     url = "https://www.zhihu.com/hot"
                 
                 hot_list.append({
@@ -94,23 +85,82 @@ def get_zhihu_hot():
                 })
             return hot_list
         else:
-            print("知乎备用接口也失败了，尝试其他方案...")
-            return get_zhihu_hot_fallback()
+            print("知乎接口失败，返回提示信息")
+            return [{
+                'title': '⚠️ 知乎热榜暂时无法获取',
+                'url': 'https://www.zhihu.com/hot'
+            }]
             
     except Exception as e:
         print(f"获取知乎热榜出错: {e}")
-        return get_zhihu_hot_fallback()
+        return [{
+            'title': '⚠️ 知乎热榜获取出错',
+            'url': 'https://www.zhihu.com/hot'
+        }]
 
-def get_zhihu_hot_fallback():
-    """知乎备用方案：返回提示信息"""
-    return [{
-        'title': '⚠️ 知乎热榜暂时无法获取（需要认证）',
-        'url': 'https://www.zhihu.com/hot'
-    }]
+def get_newrank_low_fans():
+    """抓取新榜低粉爆文榜TOP10"""
+    try:
+        from playwright.sync_api import sync_playwright
+        
+        print("开始抓取新榜低粉爆文榜...")
+        newrank_list = []
+        
+        with sync_playwright() as p:
+            # 启动浏览器（无头模式）
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+            
+            # 访问新榜页面
+            page.goto('https://www.newrank.cn/hotInfo?platform=GZH&rankType=3', timeout=30000)
+            
+            # 等待内容加载
+            page.wait_for_timeout(5000)
+            
+            # 提取低粉爆文榜数据
+            articles = page.query_selector_all('.list-item')
+            
+            for i, article in enumerate(articles[:10]):  # 只取前10条
+                try:
+                    # 提取标题
+                    title_element = article.query_selector('.title')
+                    title = title_element.inner_text() if title_element else '无标题'
+                    
+                    # 提取链接
+                    link_element = article.query_selector('a')
+                    href = link_element.get_attribute('href') if link_element else ''
+                    
+                    # 构建完整链接
+                    if href and not href.startswith('http'):
+                        full_url = f"https://www.newrank.cn{href}"
+                    else:
+                        full_url = href if href else 'https://www.newrank.cn'
+                    
+                    newrank_list.append({
+                        'title': title,
+                        'url': full_url
+                    })
+                    
+                    print(f"新榜第{i+1}条: {title}")
+                    
+                except Exception as e:
+                    print(f"解析新榜第{i+1}条出错: {e}")
+                    continue
+            
+            browser.close()
+        
+        print(f"成功获取新榜低粉爆文榜 {len(newrank_list)} 条")
+        return newrank_list
+        
+    except Exception as e:
+        print(f"获取新榜低粉爆文榜出错: {e}")
+        return [{
+            'title': '⚠️ 新榜低粉爆文榜获取失败',
+            'url': 'https://www.newrank.cn/hotInfo?platform=GZH&rankType=3'
+        }]
 
-def send_to_feishu(weibo_data, zhihu_data):
-    """发送消息到飞书 - 优化版"""
-    # 构建更清晰的消息格式
+def send_to_feishu(weibo_data, zhihu_data, newrank_data):
+    """发送消息到飞书"""
     text_content = "🌐 每日热点速递\n\n"
     
     # 微博部分
@@ -119,23 +169,28 @@ def send_to_feishu(weibo_data, zhihu_data):
         for i, item in enumerate(weibo_data, 1):
             text_content += f"{i}. {item['title']}\n   🔗 {item['url']}\n"
         text_content += "\n"
-    else:
-        text_content += "❌ 今日微博热搜获取失败\n\n"
     
     # 知乎部分
     if zhihu_data and len(zhihu_data) > 0:
-        text_content += "📚 知乎热榜\n"
+        text_content += "📚 知乎热榜 TOP 10\n"
         for i, item in enumerate(zhihu_data, 1):
             text_content += f"{i}. {item['title']}\n"
             if 'zhihu.com' in item['url']:
                 text_content += f"   🔗 {item['url']}\n"
         text_content += "\n"
-    else:
-        text_content += "❌ 今日知乎热榜获取失败\n"
+    
+    # 新榜低粉爆文榜部分
+    if newrank_data and len(newrank_data) > 0:
+        text_content += "💥 新榜低粉爆文榜 TOP 10\n"
+        for i, item in enumerate(newrank_data, 1):
+            text_content += f"{i}. {item['title']}\n"
+            if 'newrank.cn' in item['url']:
+                text_content += f"   🔗 {item['url']}\n"
+        text_content += "\n"
     
     # 添加时间戳
     current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    text_content += f"\n⏰ 更新时间: {current_time}"
+    text_content += f"⏰ 更新时间: {current_time}"
     
     # 发送到飞书
     data = {
@@ -158,9 +213,10 @@ def main():
     
     weibo_data = get_weibo_hot()
     zhihu_data = get_zhihu_hot()
+    newrank_data = get_newrank_low_fans()
     
     # 发送到飞书
-    success = send_to_feishu(weibo_data, zhihu_data)
+    success = send_to_feishu(weibo_data, zhihu_data, newrank_data)
     
     if success:
         print("热点推送完成！")
