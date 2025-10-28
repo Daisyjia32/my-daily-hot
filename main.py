@@ -99,7 +99,7 @@ def get_zhihu_hot():
         }]
 
 def get_newrank_low_fans():
-    """抓取新榜低粉爆文榜TOP10 - 精准提取文章链接版"""
+    """抓取新榜低粉爆文榜TOP10 - 点击获取真实链接版"""
     try:
         from playwright.sync_api import sync_playwright
         import os
@@ -117,7 +117,7 @@ def get_newrank_low_fans():
                 'url': 'https://www.newrank.cn/hotInfo?platform=GZH&rankType=3'
             }]
         
-        print("使用Playwright精准提取文章链接...")
+        print("使用Playwright点击获取真实文章链接...")
         
         with sync_playwright() as p:
             # 启动浏览器
@@ -153,173 +153,120 @@ def get_newrank_low_fans():
             print("等待榜单数据加载...")
             page.wait_for_timeout(8000)
             
-            # 策略：专门查找指向微信文章的真实链接
-            print("查找所有指向微信文章的链接...")
+            # 策略：直接查找榜单中的文章标题并点击获取真实链接
+            print("查找榜单中的文章标题元素...")
             
-            # 获取页面所有链接
-            all_links = page.query_selector_all('a')
-            print(f"页面共有 {len(all_links)} 个链接")
+            # 保存当前页面的URL（用于返回）
+            original_url = page.url
             
-            # 分析链接类型
-            wechat_links = []
-            other_links = []
+            # 查找所有可能包含文章标题的元素
+            all_elements = page.query_selector_all('*')
+            potential_titles = []
             
-            for link in all_links:
-                href = link.get_attribute('href') or ''
-                text = link.inner_text().strip()
-                
-                # 分类链接
-                if 'mp.weixin.qq.com' in href:
-                    wechat_links.append({
-                        'text': text,
-                        'href': href,
-                        'element': link
-                    })
-                elif href:
-                    other_links.append({
-                        'text': text,
-                        'href': href,
-                        'element': link
-                    })
+            for element in all_elements:
+                try:
+                    text = element.inner_text().strip()
+                    # 匹配文章标题特征（基于陈道明那条的特征）
+                    if (len(text) > 15 and len(text) < 100 and
+                        any(char in text for char in ['：', '！', '，', '。', '？', '…']) and
+                        not any(keyword in text for keyword in [  # 排除非文章文本
+                            '登录', '注册', '首页', '新榜', '轻松', '账号', '找号', '社媒',
+                            '营销', '推广', '投放', '创作', '数据', '回采', '作品', '提供',
+                            '助力', '增值', '点击', '前往', '正式运营', '办公室'
+                        ]) and
+                        not re.match(r'^[0-9\.\s]*$', text)):  # 排除纯数字和点
+                        
+                        potential_titles.append({
+                            'text': text,
+                            'element': element
+                        })
+                except:
+                    continue
             
-            print(f"找到 {len(wechat_links)} 个微信文章链接")
-            print(f"找到 {len(other_links)} 个其他链接")
+            print(f"找到 {len(potential_titles)} 个可能的文章标题")
             
-            # 显示微信链接用于调试
-            for i, link in enumerate(wechat_links[:5]):
-                print(f"微信链接 {i+1}: {link['text'][:30]}... -> {link['href'][:50]}...")
+            # 显示前10个用于调试
+            for i, title in enumerate(potential_titles[:10]):
+                print(f"标题 {i+1}: {title['text']}")
             
-            # 方法1：直接使用微信文章链接
+            # 尝试点击这些标题来获取真实链接
             count = 0
             seen_titles = set()
             
-            for link_info in wechat_links:
+            for title_info in potential_titles:
                 if count >= 10:
                     break
                 
-                text = link_info['text'].strip()
-                href = link_info['href']
+                title = title_info['text']
+                element = title_info['element']
                 
-                # 过滤条件：文本像文章标题
-                if (len(text) > 10 and len(text) < 80 and
-                    any(char in text for char in ['：', '！', '，', '。', '？', '"', '“', '”']) and
-                    not any(keyword in text for keyword in ['登录', '注册', '首页', '新榜', '轻松', '账号', '找号', '社媒']) and
-                    text not in seen_titles):
-                    
-                    seen_titles.add(text)
-                    newrank_list.append({
-                        'title': text,
-                        'url': href  # 直接使用微信文章链接
-                    })
-                    count += 1
-                    print(f"✅ 微信链接第{count}条: {text}")
-            
-            # 方法2：如果微信链接不够，从其他链接中提取文章标题
-            if count < 10:
-                print("从其他链接中补充文章标题...")
+                if title in seen_titles:
+                    continue
+                seen_titles.add(title)
                 
-                for link_info in other_links:
-                    if count >= 10:
-                        break
+                try:
+                    # 点击标题元素
+                    print(f"尝试点击: {title}")
                     
-                    text = link_info['text'].strip()
-                    href = link_info['href']
+                    # 在新标签页中打开链接
+                    with page.expect_popup() as popup_info:
+                        element.click(button="middle")  # 中键点击在新标签页打开
                     
-                    # 更严格的过滤条件
-                    is_article_title = (
-                        len(text) > 15 and len(text) < 100 and
-                        any(char in text for char in ['：', '！', '，', '。', '？', '…']) and  # 包含中文标点
-                        not any(keyword in text for keyword in [  # 排除广告和导航
-                            '登录', '注册', '首页', '新榜', '轻松', '账号', '找号', '社媒',
-                            '营销', '推广', '投放', '创作', '数据', '回采', '作品'
-                        ]) and
-                        not text.startswith('http') and  # 排除URL文本
-                        text not in seen_titles
-                    )
+                    popup = popup_info.value
+                    popup.wait_for_load_state()
                     
-                    if is_article_title:
-                        seen_titles.add(text)
-                        
-                        # 构建完整URL
-                        if href and not href.startswith('http'):
-                            full_url = f"https://www.newrank.cn{href}" if href.startswith('/') else f"https://www.newrank.cn/{href}"
-                        else:
-                            full_url = href
-                        
-                        newrank_list.append({
-                            'title': text,
-                            'url': full_url
-                        })
-                        count += 1
-                        print(f"✅ 其他链接第{count}条: {text}")
-            
-            # 方法3：如果还是不够，使用更精确的文本匹配
-            if count < 10:
-                print("使用精确文本匹配...")
-                
-                # 查找包含具体文章标题的文本节点
-                all_elements = page.query_selector_all('*')
-                article_texts = []
-                
-                for element in all_elements:
-                    try:
-                        text = element.inner_text().strip()
-                        # 匹配文章标题特征
-                        if (len(text) > 20 and len(text) < 200 and
-                            any(char in text for char in ['：', '！', '，', '。', '？', '…']) and
-                            not any(keyword in text for keyword in ['登录', '注册', '首页']) and
-                            text not in seen_titles):
-                            
-                            # 提取标题部分（第一行或主要部分）
-                            lines = [line.strip() for line in text.split('\n') if line.strip()]
-                            if lines:
-                                title_candidate = lines[0]
-                                if len(title_candidate) > 10:
-                                    article_texts.append({
-                                        'text': title_candidate,
-                                        'element': element
-                                    })
-                    except:
-                        continue
-                
-                # 去重
-                unique_articles = []
-                seen_texts = set()
-                for article in article_texts:
-                    text_key = article['text'][:30]  # 前30字符去重
-                    if text_key not in seen_texts:
-                        seen_texts.add(text_key)
-                        unique_articles.append(article)
-                
-                print(f"找到 {len(unique_articles)} 个可能的文章标题")
-                
-                for article in unique_articles:
-                    if count >= 10:
-                        break
+                    # 获取新标签页的URL
+                    popup_url = popup.url
+                    print(f"点击后跳转到: {popup_url}")
                     
-                    title = article['text']
-                    element = article['element']
-                    
-                    # 查找链接
-                    link_elem = element.query_selector('a')
-                    href = link_elem.get_attribute('href') if link_elem else ''
-                    
-                    # 如果是微信文章链接，直接使用
-                    if 'mp.weixin.qq.com' in href:
-                        full_url = href
-                    elif href and not href.startswith('http'):
-                        full_url = f"https://www.newrank.cn{href}" if href.startswith('/') else f"https://www.newrank.cn/{href}"
-                    else:
-                        full_url = href if href else 'https://www.newrank.cn'
-                    
-                    if title not in seen_titles:
-                        seen_titles.add(title)
+                    # 检查是否是微信文章链接
+                    if 'mp.weixin.qq.com' in popup_url:
+                        # 这是真正的微信文章链接！
                         newrank_list.append({
                             'title': title,
-                            'url': full_url
+                            'url': popup_url
                         })
                         count += 1
-                        print(f"✅ 文本匹配第{count}条: {title}")
+                        print(f"✅ 成功获取第{count}条: {title}")
+                        print(f"   真实链接: {popup_url}")
+                    
+                    # 关闭新标签页
+                    popup.close()
+                    
+                    # 等待一下再处理下一个
+                    page.wait_for_timeout(1000)
+                    
+                except Exception as e:
+                    print(f"点击失败: {e}")
+                    continue
+            
+            # 如果点击方法失败，使用备用方案：直接解析页面结构
+            if not newrank_list:
+                print("使用备用方案：直接解析页面结构...")
+                
+                # 查找包含排名和文章信息的特定结构
+                page_text = page.inner_text('body')
+                
+                # 使用正则表达式匹配排名和标题
+                # 匹配模式：数字. 标题（直到粉丝数或阅读数）
+                pattern = r'(\d+)\.\s*([^…]+?…|[^…]+?)(?=\s+[^\s]+\s+粉丝数|\s+[0-9Ww\+]+\s*收藏|\s*$)'
+                matches = re.findall(pattern, page_text)
+                
+                print(f"正则匹配到 {len(matches)} 个文章标题")
+                
+                for rank, title in matches[:10]:
+                    title = title.strip()
+                    if len(title) > 5 and title not in seen_titles:
+                        seen_titles.add(title)
+                        
+                        # 对于匹配到的标题，我们只能提供新榜页面链接
+                        # 因为无法通过简单方法获取微信文章链接
+                        newrank_list.append({
+                            'title': title,
+                            'url': original_url  # 使用原始页面链接
+                        })
+                        count += 1
+                        print(f"✅ 备用方案第{count}条: {title}")
             
             browser.close()
         
@@ -327,7 +274,7 @@ def get_newrank_low_fans():
         
         if not newrank_list:
             return [{
-                'title': '⚠️ 无法提取有效文章数据',
+                'title': '⚠️ 无法获取文章数据',
                 'url': 'https://www.newrank.cn/hotInfo?platform=GZH&rankType=3'
             }]
         
