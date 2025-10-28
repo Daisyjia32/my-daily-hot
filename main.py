@@ -99,7 +99,7 @@ def get_zhihu_hot():
         }]
 
 def get_newrank_low_fans():
-    """抓取新榜低粉爆文榜TOP10 - 精准抓取文章标题版"""
+    """抓取新榜低粉爆文榜TOP10 - 精准提取带序号的文章标题"""
     try:
         from playwright.sync_api import sync_playwright
         import os
@@ -117,7 +117,7 @@ def get_newrank_low_fans():
                 'url': 'https://www.newrank.cn/hotInfo?platform=GZH&rankType=3'
             }]
         
-        print("使用Playwright访问并抓取具体文章标题...")
+        print("使用Playwright访问并精准提取带序号的标题...")
         
         with sync_playwright() as p:
             # 启动浏览器
@@ -145,100 +145,56 @@ def get_newrank_low_fans():
             page.goto('https://www.newrank.cn/', timeout=30000)
             context.add_cookies(cookies)
             
-            # 直接访问已经筛选好的页面
-            print("访问已筛选的低粉爆文榜页面...")
+            # 访问目标页面
+            print("访问低粉爆文榜页面...")
             page.goto('https://www.newrank.cn/hotInfo?platform=GZH&rankType=3', timeout=60000)
             
             # 等待页面加载
             print("等待榜单数据加载...")
             page.wait_for_timeout(8000)
             
-            # 检查页面内容
-            page_text = page.inner_text('body')
-            print(f"页面内容长度: {len(page_text)}")
+            # 策略：直接查找带数字序号的文章标题行
+            print("查找带序号的文章标题...")
             
-            # 保存截图用于调试
-            page.screenshot(path='newrank_final.png')
-            print("已保存页面截图: newrank_final.png")
+            # 获取页面所有文本内容
+            all_text = page.inner_text('body')
             
-            # 策略：直接查找符合文章标题特征的所有文本
-            print("查找所有可能的文章标题...")
+            # 使用正则表达式匹配带序号的文章标题行
+            # 匹配模式：数字 + 点 + 空格 + 文章标题（直到遇到"粉丝数"等关键词）
+            pattern = r'(\d+)\.\s+([^…]+?…|[^…]+?)(?=\s+[^\s]+\s+粉丝数|\s*$)'
+            matches = re.findall(pattern, all_text)
             
-            # 获取页面所有文本节点
-            all_text_elements = page.query_selector_all('*')
-            print(f"页面共有 {len(all_text_elements)} 个元素")
+            print(f"正则匹配到 {len(matches)} 个带序号的标题")
             
-            # 收集所有可能的标题文本
-            potential_titles = []
+            # 显示匹配结果用于调试
+            for i, (rank, title) in enumerate(matches[:15]):
+                print(f"匹配 {i+1}: 排名{rank} - {title}")
             
-            for element in all_text_elements:
-                try:
-                    text = element.inner_text().strip()
-                    
-                    # 精准匹配文章标题特征（基于您提供的例子）
-                    is_article_title = (
-                        len(text) >= 10 and len(text) <= 100 and  # 合理长度范围
-                        re.search(r'[。！？…]', text) and  # 包含中文标点（完整句子）
-                        not any(keyword in text for keyword in [  # 排除非文章文本
-                            '登录', '注册', '首页', '新榜', '报告', '白皮书', 
-                            '热门', '榜单', '小工具', '品牌声量', '新红', '新抖',
-                            '新快', '新视', '新站', '开发者', '搜热度', '阅读', 
-                            '点赞', '转发', '收藏', '更多', '粉丝数', '发布时间'
-                        ]) and
-                        not text.startswith('http') and  # 排除URL
-                        not text.isdigit() and  # 排除纯数字
-                        ' ' not in text or len(text.split()) > 2  # 应该是连续文本或包含多个词
-                    )
-                    
-                    if is_article_title:
-                        # 进一步清理文本
-                        clean_text = re.sub(r'\s+', ' ', text)  # 合并多余空格
-                        clean_text = clean_text.split('...')[0]  # 移除省略号后的内容
-                        clean_text = clean_text.split('扫码')[0]  # 移除扫码提示
-                        
-                        if len(clean_text) > 8:
-                            potential_titles.append(clean_text)
-                            
-                except:
-                    continue
-            
-            print(f"找到 {len(potential_titles)} 个可能的文章标题")
-            
-            # 去重并显示前20个用于调试
-            unique_titles = []
-            seen = set()
-            for title in potential_titles:
-                # 使用前20个字符去重
-                key = title[:20]
-                if key not in seen:
-                    seen.add(key)
-                    unique_titles.append(title)
-            
-            print("=== 找到的标题样本 ===")
-            for i, title in enumerate(unique_titles[:20]):
-                print(f"{i+1}. {title}")
-            print("===================")
-            
-            # 提取前10个作为结果
+            # 提取前10个有效标题
             count = 0
-            for title in unique_titles:
+            for rank, title in matches:
                 if count >= 10:
                     break
                 
-                # 最终验证：确保是真正的文章标题（基于您提供的例子特征）
-                if (len(title) > 8 and 
-                    any(char in title for char in ['：', '！', '，', '。', '？']) and  # 包含中文标点
-                    not any(keyword in title for keyword in ['新榜', '首页', '登录'])):
-                    
+                title = title.strip()
+                if len(title) > 5:
                     # 查找这个标题对应的链接
-                    title_element = page.query_selector(f'text="{title}"')
-                    href = ""
+                    # 由于标题可能被截断，我们使用部分匹配
+                    search_title = title.split('…')[0] if '…' in title else title
+                    search_title = search_title[:20]  # 使用前20个字符进行搜索
                     
-                    if title_element:
-                        # 找到包含这个标题的链接元素
-                        link_element = title_element.evaluate_handle('(elem) => elem.closest("a")')
-                        if link_element:
-                            href = link_element.get_attribute('href') or ''
+                    # 查找包含这个标题文本的元素
+                    title_elements = page.query_selector_all(f'text=/{re.escape(search_title)}/')
+                    
+                    href = ""
+                    for elem in title_elements:
+                        # 找到包含这个文本的链接元素
+                        link_elem = elem.evaluate_handle('(elem) => elem.closest("a")')
+                        if link_elem:
+                            href_value = link_elem.get_attribute('href')
+                            if href_value:
+                                href = href_value
+                                break
                     
                     # 构建完整URL
                     if href and not href.startswith('http'):
@@ -251,7 +207,48 @@ def get_newrank_low_fans():
                         'url': full_url
                     })
                     count += 1
-                    print(f"✅ 确认文章第{count}条: {title}")
+                    print(f"✅ 文章第{count}条: {title}")
+            
+            # 备用方案：如果正则匹配失败，使用更直接的方法
+            if not newrank_list:
+                print("使用备用方案：直接查找排名数字...")
+                
+                # 查找所有包含排名数字的元素
+                rank_elements = page.query_selector_all('text=/^\d+\./')
+                
+                for rank_elem in rank_elements:
+                    if count >= 10:
+                        break
+                    
+                    try:
+                        rank_text = rank_elem.inner_text().strip()
+                        # 提取排名数字后面的标题
+                        parent = rank_elem.evaluate_handle('(elem) => elem.parentElement')
+                        if parent:
+                            parent_text = parent.as_element().inner_text().strip()
+                            # 从父文本中提取标题（排名数字后的内容）
+                            title_match = re.search(r'\d+\.\s*(.+?)(?=\s+[^\s]+\s+粉丝数|$)', parent_text)
+                            if title_match:
+                                title = title_match.group(1).strip()
+                                
+                                # 查找链接
+                                link_elem = parent.evaluate_handle('(elem) => elem.querySelector("a")')
+                                href = link_elem.get_attribute('href') if link_elem else ''
+                                
+                                if href and not href.startswith('http'):
+                                    full_url = f"https://www.newrank.cn{href}" if href.startswith('/') else f"https://www.newrank.cn/{href}"
+                                else:
+                                    full_url = href if href else 'https://www.newrank.cn'
+                                
+                                newrank_list.append({
+                                    'title': title,
+                                    'url': full_url
+                                })
+                                count += 1
+                                print(f"✅ 备用方案第{count}条: {title}")
+                                
+                    except Exception as e:
+                        continue
             
             browser.close()
         
@@ -259,7 +256,7 @@ def get_newrank_low_fans():
         
         if not newrank_list:
             return [{
-                'title': '⚠️ 找到标题但无法确认链接',
+                'title': '⚠️ 无法提取带序号的标题',
                 'url': 'https://www.newrank.cn/hotInfo?platform=GZH&rankType=3'
             }]
         
