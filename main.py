@@ -99,10 +99,11 @@ def get_zhihu_hot():
         }]
 
 def get_newrank_low_fans():
-    """抓取新榜低粉爆文榜TOP10 - 最终版"""
+    """抓取新榜低粉爆文榜TOP10 - 精准抓取文章标题版"""
     try:
         from playwright.sync_api import sync_playwright
         import os
+        import re
         
         print("开始抓取新榜低粉爆文榜...")
         newrank_list = []
@@ -116,7 +117,7 @@ def get_newrank_low_fans():
                 'url': 'https://www.newrank.cn/hotInfo?platform=GZH&rankType=3'
             }]
         
-        print("使用Playwright模拟浏览器访问...")
+        print("使用Playwright访问并抓取具体文章标题...")
         
         with sync_playwright() as p:
             # 启动浏览器
@@ -124,7 +125,7 @@ def get_newrank_low_fans():
             context = browser.new_context()
             page = context.new_page()
             
-            # 设置Cookie - 使用正确的格式
+            # 设置Cookie
             print("设置登录Cookie...")
             cookies = []
             cookie_pairs = newrank_cookie.split(';')
@@ -144,95 +145,113 @@ def get_newrank_low_fans():
             page.goto('https://www.newrank.cn/', timeout=30000)
             context.add_cookies(cookies)
             
-            # 访问目标页面
-            print("访问低粉爆文榜页面...")
+            # 直接访问已经筛选好的页面
+            print("访问已筛选的低粉爆文榜页面...")
             page.goto('https://www.newrank.cn/hotInfo?platform=GZH&rankType=3', timeout=60000)
             
-            # 等待页面完全加载
-            print("等待动态内容加载...")
-            page.wait_for_timeout(10000)
+            # 等待页面加载
+            print("等待榜单数据加载...")
+            page.wait_for_timeout(8000)
             
             # 检查页面内容
             page_text = page.inner_text('body')
             print(f"页面内容长度: {len(page_text)}")
-            print(f"包含'低粉爆文': {'低粉爆文' in page_text}")
             
-            if '低粉爆文' not in page_text:
-                # 保存截图用于调试
-                page.screenshot(path='newrank_debug.png')
-                print("已保存页面截图: newrank_debug.png")
-                browser.close()
-                return [{
-                    'title': '⚠️ 登录失败或页面加载异常',
-                    'url': 'https://www.newrank.cn/hotInfo?platform=GZH&rankType=3'
-                }]
+            # 保存截图用于调试
+            page.screenshot(path='newrank_final.png')
+            print("已保存页面截图: newrank_final.png")
             
-            print("✅ 登录成功！开始查找文章...")
+            # 策略：直接查找符合文章标题特征的所有文本
+            print("查找所有可能的文章标题...")
             
-            # 方法1：查找所有包含文章标题的元素
-            print("查找文章标题...")
+            # 获取页面所有文本节点
+            all_text_elements = page.query_selector_all('*')
+            print(f"页面共有 {len(all_text_elements)} 个元素")
             
-            # 尝试多种选择器
-            selectors_to_try = [
-                'a',  # 所有链接
-                '[class*="title"]',
-                '[class*="name"]',
-                '.weui-media-box__title',
-                '.list-item-title',
-                'h1, h2, h3, h4'
-            ]
+            # 收集所有可能的标题文本
+            potential_titles = []
             
-            all_elements = []
-            for selector in selectors_to_try:
-                elements = page.query_selector_all(selector)
-                all_elements.extend(elements)
-                print(f"选择器 '{selector}' 找到 {len(elements)} 个元素")
+            for element in all_text_elements:
+                try:
+                    text = element.inner_text().strip()
+                    
+                    # 精准匹配文章标题特征（基于您提供的例子）
+                    is_article_title = (
+                        len(text) >= 10 and len(text) <= 100 and  # 合理长度范围
+                        re.search(r'[。！？…]', text) and  # 包含中文标点（完整句子）
+                        not any(keyword in text for keyword in [  # 排除非文章文本
+                            '登录', '注册', '首页', '新榜', '报告', '白皮书', 
+                            '热门', '榜单', '小工具', '品牌声量', '新红', '新抖',
+                            '新快', '新视', '新站', '开发者', '搜热度', '阅读', 
+                            '点赞', '转发', '收藏', '更多', '粉丝数', '发布时间'
+                        ]) and
+                        not text.startswith('http') and  # 排除URL
+                        not text.isdigit() and  # 排除纯数字
+                        ' ' not in text or len(text.split()) > 2  # 应该是连续文本或包含多个词
+                    )
+                    
+                    if is_article_title:
+                        # 进一步清理文本
+                        clean_text = re.sub(r'\s+', ' ', text)  # 合并多余空格
+                        clean_text = clean_text.split('...')[0]  # 移除省略号后的内容
+                        clean_text = clean_text.split('扫码')[0]  # 移除扫码提示
+                        
+                        if len(clean_text) > 8:
+                            potential_titles.append(clean_text)
+                            
+                except:
+                    continue
             
-            # 去重
-            unique_elements = []
+            print(f"找到 {len(potential_titles)} 个可能的文章标题")
+            
+            # 去重并显示前20个用于调试
+            unique_titles = []
             seen = set()
-            for elem in all_elements:
-                elem_id = str(elem)
-                if elem_id not in seen:
-                    seen.add(elem_id)
-                    unique_elements.append(elem)
+            for title in potential_titles:
+                # 使用前20个字符去重
+                key = title[:20]
+                if key not in seen:
+                    seen.add(key)
+                    unique_titles.append(title)
             
-            print(f"去重后共有 {len(unique_elements)} 个元素")
+            print("=== 找到的标题样本 ===")
+            for i, title in enumerate(unique_titles[:20]):
+                print(f"{i+1}. {title}")
+            print("===================")
             
-            # 提取文章数据
+            # 提取前10个作为结果
             count = 0
-            for elem in unique_elements:
+            for title in unique_titles:
                 if count >= 10:
                     break
+                
+                # 最终验证：确保是真正的文章标题（基于您提供的例子特征）
+                if (len(title) > 8 and 
+                    any(char in title for char in ['：', '！', '，', '。', '？']) and  # 包含中文标点
+                    not any(keyword in title for keyword in ['新榜', '首页', '登录'])):
                     
-                try:
-                    text = elem.inner_text().strip()
-                    # 获取链接（元素本身或父元素）
-                    link_elem = elem
-                    if elem.get_attribute('href') is None:
-                        link_elem = elem.query_selector('a') or elem
+                    # 查找这个标题对应的链接
+                    title_element = page.query_selector(f'text="{title}"')
+                    href = ""
                     
-                    href = link_elem.get_attribute('href') or ''
+                    if title_element:
+                        # 找到包含这个标题的链接元素
+                        link_element = title_element.evaluate_handle('(elem) => elem.closest("a")')
+                        if link_element:
+                            href = link_element.get_attribute('href') or ''
                     
-                    # 过滤条件
-                    if (len(text) > 8 and len(text) < 80 and 
-                        not any(keyword in text for keyword in ['登录', '注册', '首页', '新榜', '报告', '白皮书', '热门', '榜单'])):
-                        
-                        # 构建完整URL
-                        if href and not href.startswith('http'):
-                            full_url = f"https://www.newrank.cn{href}" if href.startswith('/') else f"https://www.newrank.cn/{href}"
-                        else:
-                            full_url = href
-                        
-                        newrank_list.append({
-                            'title': text,
-                            'url': full_url
-                        })
-                        count += 1
-                        print(f"新榜第{count}条: {text}")
-                        
-                except Exception as e:
-                    continue
+                    # 构建完整URL
+                    if href and not href.startswith('http'):
+                        full_url = f"https://www.newrank.cn{href}" if href.startswith('/') else f"https://www.newrank.cn/{href}"
+                    else:
+                        full_url = href if href else 'https://www.newrank.cn'
+                    
+                    newrank_list.append({
+                        'title': title,
+                        'url': full_url
+                    })
+                    count += 1
+                    print(f"✅ 确认文章第{count}条: {title}")
             
             browser.close()
         
@@ -240,7 +259,7 @@ def get_newrank_low_fans():
         
         if not newrank_list:
             return [{
-                'title': '⚠️ 找到内容但无法解析具体文章',
+                'title': '⚠️ 找到标题但无法确认链接',
                 'url': 'https://www.newrank.cn/hotInfo?platform=GZH&rankType=3'
             }]
         
@@ -252,7 +271,7 @@ def get_newrank_low_fans():
             'title': '⚠️ 新榜低粉爆文榜获取失败',
             'url': 'https://www.newrank.cn/hotInfo?platform=GZH&rankType=3'
         }]
-        
+
 def send_to_feishu(weibo_data, zhihu_data, newrank_data):
     """发送消息到飞书"""
     text_content = "🌐 每日热点速递\n\n"
