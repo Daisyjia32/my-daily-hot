@@ -99,7 +99,7 @@ def get_zhihu_hot():
         }]
 
 def get_newrank_low_fans():
-    """抓取新榜低粉爆文榜TOP10"""
+    """抓取新榜低粉爆文榜TOP10 - 调试版"""
     try:
         from playwright.sync_api import sync_playwright
         
@@ -107,41 +107,86 @@ def get_newrank_low_fans():
         newrank_list = []
         
         with sync_playwright() as p:
-            # 启动浏览器（无头模式）
+            # 启动浏览器
             browser = p.chromium.launch(headless=True)
             page = browser.new_page()
             
             # 访问新榜页面
-            page.goto('https://www.newrank.cn/hotInfo?platform=GZH&rankType=3', timeout=30000)
+            print("正在访问新榜页面...")
+            page.goto('https://www.newrank.cn/hotInfo?platform=GZH&rankType=3', timeout=60000)
             
-            # 等待内容加载
-            page.wait_for_timeout(5000)
+            # 等待更长时间确保页面加载完成
+            print("等待页面加载...")
+            page.wait_for_timeout(8000)
             
-            # 提取低粉爆文榜数据
-            articles = page.query_selector_all('.list-item')
+            # 先截图保存页面状态用于调试
+            page.screenshot(path='newrank_page.png')
+            print("已保存页面截图")
             
-            for i, article in enumerate(articles[:10]):  # 只取前10条
+            # 获取页面HTML内容用于分析
+            html_content = page.content()
+            print(f"页面标题: {page.title()}")
+            
+            # 尝试多种可能的选择器
+            selectors_to_try = [
+                '.list-item',
+                '.rank-item',
+                '.item',
+                '.list-group-item',
+                '[class*="list"]',
+                '[class*="item"]',
+                '.weui-media-box'
+            ]
+            
+            found_articles = []
+            for selector in selectors_to_try:
+                articles = page.query_selector_all(selector)
+                if articles and len(articles) > 5:  # 如果找到足够多的元素
+                    print(f"使用选择器 '{selector}' 找到了 {len(articles)} 个元素")
+                    found_articles = articles
+                    break
+                else:
+                    print(f"选择器 '{selector}' 找到 {len(articles) if articles else 0} 个元素")
+            
+            # 如果没找到，尝试通过文本内容查找
+            if not found_articles:
+                print("尝试通过文本内容查找...")
+                page_content = page.inner_text('body')
+                if '低粉爆文' in page_content:
+                    print("页面包含'低粉爆文'文本")
+                else:
+                    print("页面不包含'低粉爆文'文本")
+                
+                # 查找所有链接
+                all_links = page.query_selector_all('a')
+                print(f"页面中共有 {len(all_links)} 个链接")
+                
+                # 取前20个链接作为备选
+                found_articles = all_links[:20]
+            
+            # 提取数据
+            for i, article in enumerate(found_articles[:10]):
                 try:
-                    # 提取标题
-                    title_element = article.query_selector('.title')
-                    title = title_element.inner_text() if title_element else '无标题'
+                    # 获取元素的文本内容
+                    text_content = article.inner_text().strip()
+                    if not text_content or len(text_content) < 5:
+                        continue
                     
-                    # 提取链接
-                    link_element = article.query_selector('a')
-                    href = link_element.get_attribute('href') if link_element else ''
+                    # 获取链接
+                    href = article.get_attribute('href') or ''
                     
                     # 构建完整链接
                     if href and not href.startswith('http'):
-                        full_url = f"https://www.newrank.cn{href}"
+                        full_url = f"https://www.newrank.cn{href}" if href.startswith('/') else f"https://www.newrank.cn/{href}"
                     else:
                         full_url = href if href else 'https://www.newrank.cn'
                     
                     newrank_list.append({
-                        'title': title,
+                        'title': text_content[:100],  # 限制标题长度
                         'url': full_url
                     })
                     
-                    print(f"新榜第{i+1}条: {title}")
+                    print(f"新榜第{i+1}条: {text_content[:50]}...")
                     
                 except Exception as e:
                     print(f"解析新榜第{i+1}条出错: {e}")
@@ -149,8 +194,11 @@ def get_newrank_low_fans():
             
             browser.close()
         
-        print(f"成功获取新榜低粉爆文榜 {len(newrank_list)} 条")
-        return newrank_list
+        print(f"成功获取新榜数据 {len(newrank_list)} 条")
+        return newrank_list if newrank_list else [{
+            'title': '⚠️ 新榜低粉爆文榜数据解析失败，需要调整选择器',
+            'url': 'https://www.newrank.cn/hotInfo?platform=GZH&rankType=3'
+        }]
         
     except Exception as e:
         print(f"获取新榜低粉爆文榜出错: {e}")
