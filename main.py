@@ -97,6 +97,7 @@ def get_zhihu_hot():
             'title': '⚠️ 知乎热榜获取出错',
             'url': 'https://www.zhihu.com/hot'
         }]
+
 def get_newrank_low_fans():
     """抓取新榜低粉爆文榜TOP10 - 直接定位标题版"""
     try:
@@ -215,7 +216,6 @@ def get_newrank_low_fans():
             'title': '⚠️ 新榜低粉爆文榜获取失败',
             'url': 'https://www.newrank.cn/hotInfo?platform=GZH&rankType=3'
         }]
-
 
 def send_to_feishu(weibo_data, zhihu_data, newrank_data):
     """发送消息到飞书"""
