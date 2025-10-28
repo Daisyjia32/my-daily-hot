@@ -99,132 +99,112 @@ def get_zhihu_hot():
         }]
 
 def get_newrank_low_fans():
-    """抓取新榜低粉爆文榜TOP10 - 等待特定内容版"""
+    """抓取新榜低粉爆文榜TOP10 - 简化精准版"""
     try:
         from playwright.sync_api import sync_playwright
+        import os
         
         print("开始抓取新榜低粉爆文榜...")
         newrank_list = []
         
+        # 从环境变量获取Cookie
+        newrank_cookie = os.environ.get('NEWRANK_COOKIE', '')
+        
+        if not newrank_cookie:
+            return [{
+                'title': '⚠️ 未设置新榜Cookie',
+                'url': 'https://www.newrank.cn/hotInfo?platform=GZH&rankType=3'
+            }]
+        
         with sync_playwright() as p:
             # 启动浏览器
             browser = p.chromium.launch(headless=True)
-            page = browser.new_page()
+            context = browser.new_context()
+            page = context.new_page()
             
-            # 访问新榜页面
+            # 设置Cookie
+            print("设置登录Cookie...")
+            cookies = []
+            for cookie_str in newrank_cookie.split(';'):
+                cookie_str = cookie_str.strip()
+                if '=' in cookie_str:
+                    name, value = cookie_str.split('=', 1)
+                    cookies.append({
+                        'name': name.strip(),
+                        'value': value.strip(),
+                        'domain': '.newrank.cn',
+                        'path': '/'
+                    })
+            
+            context.add_cookies(cookies)
+            
+            # 访问页面
             print("正在访问新榜页面...")
             page.goto('https://www.newrank.cn/hotInfo?platform=GZH&rankType=3', timeout=60000)
             
-            # 等待更长时间，确保动态内容加载
-            print("等待动态内容加载...")
-            page.wait_for_timeout(15000)
+            # 等待加载
+            page.wait_for_timeout(8000)
             
-            # 方法1：等待特定的低粉爆文榜内容出现
-            print("=== 等待低粉爆文榜内容 ===")
-            
-            # 尝试等待包含公众号文章的元素出现
-            try:
-                # 等待可能包含公众号文章的区域
-                page.wait_for_selector('[class*="weui-media-box"], [class*="list-item"], [class*="rank-item"]', timeout=10000)
-                print("检测到文章区域")
-            except:
-                print("未检测到标准文章区域，继续...")
-            
-            # 获取页面所有文本，检查是否包含"低粉爆文"相关内容
-            page_text = page.inner_text('body')
-            if '低粉爆文' in page_text:
-                print("页面包含'低粉爆文'内容")
+            # 检查登录状态
+            page_content = page.inner_text('body')
+            if '低粉爆文' in page_content:
+                print("✅ 登录成功，检测到低粉爆文内容")
             else:
-                print("页面不包含'低粉爆文'内容")
+                print("❌ 登录可能失败")
+                browser.close()
+                return [{
+                    'title': '⚠️ Cookie可能已过期',
+                    'url': 'https://www.newrank.cn/hotInfo?platform=GZH&rankType=3'
+                }]
             
-            # 方法2：查找所有包含公众号相关文本的元素
-            print("=== 查找公众号相关内容 ===")
+            # 简化策略：直接查找所有包含文章标题的链接
+            print("直接查找文章标题链接...")
             
-            # 查找所有包含"阅读"、"在看"等公众号指标的元素
-            wechat_indicators = ['阅读', '在看', '点赞', '公众号', '微信', 'WX']
-            wechat_elements = []
+            # 方法1：查找所有链接，过滤出可能是文章标题的
+            all_links = page.query_selector_all('a')
+            print(f"页面中共有 {len(all_links)} 个链接")
             
-            all_elements = page.query_selector_all('div, li, article, section')
-            for elem in all_elements:
-                text = elem.inner_text().strip()
-                if any(indicator in text for indicator in wechat_indicators) and len(text) > 20:
-                    wechat_elements.append(elem)
-            
-            print(f"找到 {len(wechat_elements)} 个包含公众号指标的元素")
-            
-            # 从这些元素中提取标题和链接
-            for i, elem in enumerate(wechat_elements[:20]):  # 只检查前20个
+            article_candidates = []
+            for link in all_links:
                 try:
-                    # 在元素内查找标题和链接
-                    title_elem = elem.query_selector('h1, h2, h3, h4, [class*="title"], [class*="name"]')
-                    link_elem = elem.query_selector('a')
+                    text = link.inner_text().strip()
+                    href = link.get_attribute('href') or ''
                     
-                    if title_elem and link_elem:
-                        title = title_elem.inner_text().strip()
-                        href = link_elem.get_attribute('href') or ''
+                    # 过滤条件：文本长度合适，且看起来像文章标题
+                    if (len(text) >= 8 and len(text) <= 60 and 
+                        not any(keyword in text for keyword in ['登录', '注册', '首页', '下载', '更多', '热门', '榜单', '报告', '白皮书'])):
                         
-                        if title and len(title) > 5 and len(title) < 80:
-                            # 构建完整链接
+                        # 检查链接是否指向文章
+                        if ('/p/' in href or 'wx.' in href or 'mp.weixin' in href or 
+                            'article' in href or 'detail' in href):
+                            
+                            # 构建完整URL
                             if href and not href.startswith('http'):
                                 full_url = f"https://www.newrank.cn{href}" if href.startswith('/') else f"https://www.newrank.cn/{href}"
                             else:
                                 full_url = href
                             
-                            # 检查是否是公众号文章链接
-                            if full_url and ('wx.' in full_url or 'mp.weixin' in full_url or 'qq.com' in full_url):
-                                newrank_list.append({
-                                    'title': title,
-                                    'url': full_url
-                                })
-                                print(f"公众号文章 {len(newrank_list)}: {title}")
+                            article_candidates.append({
+                                'title': text,
+                                'url': full_url
+                            })
                             
-                            if len(newrank_list) >= 10:
-                                break
-                                
-                except Exception as e:
+                except:
                     continue
             
-            # 方法3：如果还没找到，尝试直接搜索包含特定结构的元素
-            if len(newrank_list) < 5:
-                print("=== 尝试直接搜索文章结构 ===")
-                
-                # 查找可能包含文章标题和阅读数的组合
-                potential_articles = page.query_selector_all('.weui-media-box, .list-item, [class*="media"], [class*="article"]')
-                print(f"找到 {len(potential_articles)} 个可能文章元素")
-                
-                for article in potential_articles[:15]:
-                    if len(newrank_list) >= 10:
-                        break
-                        
-                    try:
-                        # 获取整个文章的文本
-                        article_text = article.inner_text().strip()
-                        
-                        # 如果包含阅读数等指标，可能是公众号文章
-                        if '阅读' in article_text and '在看' in article_text:
-                            # 提取标题（通常是第一行或最突出的文本）
-                            lines = [line.strip() for line in article_text.split('\n') if line.strip()]
-                            if lines:
-                                title = lines[0]
-                                if len(title) > 5 and len(title) < 80:
-                                    # 查找链接
-                                    link_elem = article.query_selector('a')
-                                    href = link_elem.get_attribute('href') if link_elem else ''
-                                    
-                                    if href and not href.startswith('http'):
-                                        full_url = f"https://www.newrank.cn{href}" if href.startswith('/') else f"https://www.newrank.cn/{href}"
-                                    else:
-                                        full_url = href
-                                    
-                                    if full_url:
-                                        newrank_list.append({
-                                            'title': title,
-                                            'url': full_url
-                                        })
-                                        print(f"低粉爆文 {len(newrank_list)}: {title}")
-                                        
-                    except Exception as e:
-                        continue
+            print(f"找到 {len(article_candidates)} 个候选文章")
+            
+            # 去重并取前10个
+            seen_titles = set()
+            for article in article_candidates:
+                if len(newrank_list) >= 10:
+                    break
+                    
+                title_key = article['title'][:30]  # 用前30字符去重
+                if title_key not in seen_titles:
+                    seen_titles.add(title_key)
+                    newrank_list.append(article)
+                    print(f"新榜第{len(newrank_list)}条: {article['title']}")
             
             browser.close()
         
@@ -232,7 +212,7 @@ def get_newrank_low_fans():
         
         if not newrank_list:
             return [{
-                'title': '⚠️ 页面可能需要登录或内容加载方式特殊',
+                'title': '⚠️ 找到内容但无法解析具体文章',
                 'url': 'https://www.newrank.cn/hotInfo?platform=GZH&rankType=3'
             }]
         
@@ -258,7 +238,7 @@ def send_to_feishu(weibo_data, zhihu_data, newrank_data):
     
     # 知乎部分
     if zhihu_data and len(zhihu_data) > 0:
-        text_content += "📚 知乎热榜 TOP 10\n"
+        text_content += "📚 知乎热榜 TOP 30\n"
         for i, item in enumerate(zhihu_data, 1):
             text_content += f"{i}. {item['title']}\n"
             if 'zhihu.com' in item['url']:
