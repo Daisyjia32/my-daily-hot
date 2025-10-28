@@ -30,5 +30,6 @@ jobs:
     - name: Run hot news script
       env:
         FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+        NEWRANK_COOKIE: ${{ secrets.NEWRANK_COOKIE }}  
       run: |
         python main.py
