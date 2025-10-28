@@ -99,12 +99,13 @@ def get_zhihu_hot():
         }]
 
 def get_newrank_low_fans():
-    """抓取新榜低粉爆文榜TOP10 - 调试版"""
+    """抓取新榜低粉爆文榜TOP10 - 最终版"""
     try:
-        import requests
+        from playwright.sync_api import sync_playwright
         import os
         
         print("开始抓取新榜低粉爆文榜...")
+        newrank_list = []
         
         # 从环境变量获取Cookie
         newrank_cookie = os.environ.get('NEWRANK_COOKIE', '')
@@ -115,123 +116,131 @@ def get_newrank_low_fans():
                 'url': 'https://www.newrank.cn/hotInfo?platform=GZH&rankType=3'
             }]
         
-        print("使用requests直接访问...")
+        print("使用Playwright模拟浏览器访问...")
         
-        # 设置更完整的请求头
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-            'Cookie': newrank_cookie,
-            'Referer': 'https://www.newrank.cn/',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'same-origin'
-        }
-        
-        # 创建会话以保持Cookie
-        session = requests.Session()
-        session.headers.update(headers)
-        
-        # 首先访问首页建立会话
-        print("访问首页建立会话...")
-        home_response = session.get('https://www.newrank.cn/', timeout=10)
-        print(f"首页状态码: {home_response.status_code}")
-        
-        # 然后访问目标页面
-        print("访问低粉爆文榜页面...")
-        response = session.get(
-            'https://www.newrank.cn/hotInfo?platform=GZH&rankType=3',
-            timeout=30
-        )
-        
-        print(f"请求状态码: {response.status_code}")
-        print(f"响应长度: {len(response.text)}")
-        
-        # 调试：查看响应内容的前500字符
-        print("=== 响应内容预览 ===")
-        print(response.text[:500])
-        print("===================")
-        
-        # 检查关键内容
-        has_low_fans = '低粉爆文' in response.text
-        has_login = '登录' in response.text
-        has_register = '注册' in response.text
-        
-        print(f"包含'低粉爆文': {has_low_fans}")
-        print(f"包含'登录': {has_login}")
-        print(f"包含'注册': {has_register}")
-        
-        if response.status_code != 200:
-            return [{
-                'title': f'⚠️ 请求失败: {response.status_code}',
-                'url': 'https://www.newrank.cn/hotInfo?platform=GZH&rankType=3'
-            }]
-        
-        # 更精确的登录状态判断
-        if not has_low_fans:
-            return [{
-                'title': '⚠️ 页面不包含低粉爆文内容',
-                'url': 'https://www.newrank.cn/hotInfo?platform=GZH&rankType=3'
-            }]
-        
-        if has_login and has_register:
-            return [{
-                'title': '⚠️ Cookie可能已过期或无效',
-                'url': 'https://www.newrank.cn/hotInfo?platform=GZH&rankType=3'
-            }]
-        
-        print("✅ 登录成功，开始解析页面内容...")
-        
-        # 简单的HTML解析
-        import re
-        
-        # 查找所有链接和标题
-        article_pattern = r'<a\s+[^>]*href="([^"]*)"[^>]*>([^<]+)</a>'
-        matches = re.findall(article_pattern, response.text)
-        
-        print(f"找到 {len(matches)} 个链接")
-        
-        newrank_list = []
-        seen_titles = set()
-        
-        for href, title in matches:
-            if len(newrank_list) >= 10:
-                break
-                
-            title = title.strip()
-            if len(title) > 8 and len(title) < 60:
-                # 去重
-                title_key = title[:30]
-                if title_key in seen_titles:
+        with sync_playwright() as p:
+            # 启动浏览器
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context()
+            page = context.new_page()
+            
+            # 设置Cookie - 使用正确的格式
+            print("设置登录Cookie...")
+            cookies = []
+            cookie_pairs = newrank_cookie.split(';')
+            
+            for cookie_str in cookie_pairs:
+                cookie_str = cookie_str.strip()
+                if '=' in cookie_str:
+                    name, value = cookie_str.split('=', 1)
+                    cookies.append({
+                        'name': name.strip(),
+                        'value': value.strip(),
+                        'domain': '.newrank.cn',
+                        'path': '/'
+                    })
+            
+            # 先访问首页设置Cookie
+            page.goto('https://www.newrank.cn/', timeout=30000)
+            context.add_cookies(cookies)
+            
+            # 访问目标页面
+            print("访问低粉爆文榜页面...")
+            page.goto('https://www.newrank.cn/hotInfo?platform=GZH&rankType=3', timeout=60000)
+            
+            # 等待页面完全加载
+            print("等待动态内容加载...")
+            page.wait_for_timeout(10000)
+            
+            # 检查页面内容
+            page_text = page.inner_text('body')
+            print(f"页面内容长度: {len(page_text)}")
+            print(f"包含'低粉爆文': {'低粉爆文' in page_text}")
+            
+            if '低粉爆文' not in page_text:
+                # 保存截图用于调试
+                page.screenshot(path='newrank_debug.png')
+                print("已保存页面截图: newrank_debug.png")
+                browser.close()
+                return [{
+                    'title': '⚠️ 登录失败或页面加载异常',
+                    'url': 'https://www.newrank.cn/hotInfo?platform=GZH&rankType=3'
+                }]
+            
+            print("✅ 登录成功！开始查找文章...")
+            
+            # 方法1：查找所有包含文章标题的元素
+            print("查找文章标题...")
+            
+            # 尝试多种选择器
+            selectors_to_try = [
+                'a',  # 所有链接
+                '[class*="title"]',
+                '[class*="name"]',
+                '.weui-media-box__title',
+                '.list-item-title',
+                'h1, h2, h3, h4'
+            ]
+            
+            all_elements = []
+            for selector in selectors_to_try:
+                elements = page.query_selector_all(selector)
+                all_elements.extend(elements)
+                print(f"选择器 '{selector}' 找到 {len(elements)} 个元素")
+            
+            # 去重
+            unique_elements = []
+            seen = set()
+            for elem in all_elements:
+                elem_id = str(elem)
+                if elem_id not in seen:
+                    seen.add(elem_id)
+                    unique_elements.append(elem)
+            
+            print(f"去重后共有 {len(unique_elements)} 个元素")
+            
+            # 提取文章数据
+            count = 0
+            for elem in unique_elements:
+                if count >= 10:
+                    break
+                    
+                try:
+                    text = elem.inner_text().strip()
+                    # 获取链接（元素本身或父元素）
+                    link_elem = elem
+                    if elem.get_attribute('href') is None:
+                        link_elem = elem.query_selector('a') or elem
+                    
+                    href = link_elem.get_attribute('href') or ''
+                    
+                    # 过滤条件
+                    if (len(text) > 8 and len(text) < 80 and 
+                        not any(keyword in text for keyword in ['登录', '注册', '首页', '新榜', '报告', '白皮书', '热门', '榜单'])):
+                        
+                        # 构建完整URL
+                        if href and not href.startswith('http'):
+                            full_url = f"https://www.newrank.cn{href}" if href.startswith('/') else f"https://www.newrank.cn/{href}"
+                        else:
+                            full_url = href
+                        
+                        newrank_list.append({
+                            'title': text,
+                            'url': full_url
+                        })
+                        count += 1
+                        print(f"新榜第{count}条: {text}")
+                        
+                except Exception as e:
                     continue
-                seen_titles.add(title_key)
-                
-                # 过滤掉明显不是文章的标题
-                exclude_keywords = ['登录', '注册', '首页', '新榜', '报告', '白皮书', '热门', '榜单', '小工具']
-                if any(keyword in title for keyword in exclude_keywords):
-                    continue
-                
-                # 构建完整URL
-                if href and not href.startswith('http'):
-                    full_url = f"https://www.newrank.cn{href}" if href.startswith('/') else f"https://www.newrank.cn/{href}"
-                else:
-                    full_url = href
-                
-                newrank_list.append({
-                    'title': title,
-                    'url': full_url
-                })
-                print(f"文章 {len(newrank_list)}: {title}")
+            
+            browser.close()
         
         print(f"成功获取新榜数据 {len(newrank_list)} 条")
         
         if not newrank_list:
             return [{
-                'title': '⚠️ 登录成功但未找到有效文章',
+                'title': '⚠️ 找到内容但无法解析具体文章',
                 'url': 'https://www.newrank.cn/hotInfo?platform=GZH&rankType=3'
             }]
         
