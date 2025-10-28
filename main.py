@@ -21,12 +21,14 @@ def get_weibo_hot():
         print(f"微博接口状态码: {response.status_code}") # 新增打印状态码
         if response.status_code == 200:
             data = response.json()
+            print(f"微博返回的原始数据: {json.dumps(data, ensure_ascii=False)[:1000]}")
             hot_list = []
             for item in data['data']['realtime'][:10]:
                 hot_list.append({
                     'title': item['note'],
                     'url': f"https://s.weibo.com/weibo?q=%23{item['word']}%23"
                 })
+            print(f"解析后的微博热点列表: {hot_list}")
             return hot_list
         else:
             print(f"微博请求失败，状态码：{response.status_code}")
