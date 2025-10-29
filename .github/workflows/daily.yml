@@ -3,7 +3,7 @@ name: Daily Hot News Push
 on:
   schedule:
     # 每天 UTC 时间 01:00 运行，即北京时间 09:00
-    - cron: '0 1 * * *'
+    - cron: '0 2 * * *'
   workflow_dispatch: # 允许手动触发
 
 jobs:
