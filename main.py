@@ -99,7 +99,7 @@ def get_zhihu_hot():
         }]
 
 def get_newrank_low_fans():
-    """抓取新榜低粉爆文榜TOP10 - 修复顺序问题"""
+    """抓取新榜低粉爆文榜TOP10 - 修复漏抓和多抓问题"""
     try:
         from playwright.sync_api import sync_playwright
         import os
@@ -156,110 +156,104 @@ def get_newrank_low_fans():
             print("等待榜单数据加载...")
             page.wait_for_timeout(15000)
             
-            # 方法1：直接使用更精确的选择器提取标题
-            print("方法1：使用精确选择器提取标题...")
+            # 方法1：直接分析表格结构，精确提取前10行
+            print("方法1：精确分析表格结构...")
             
-            # 尝试多种可能的选择器
-            title_selectors = [
-                '[class*="title"]',
-                '.ant-table-cell a',
-                'tr td:nth-child(2)',  # 第二列通常是标题
-                'tr .title-text',
-                'tr a[href*="/new/"]'
-            ]
-            
-            all_titles = []
-            for selector in title_selectors:
-                try:
-                    elements = page.query_selector_all(selector)
-                    for element in elements:
-                        title = element.inner_text().strip()
-                        if _is_valid_title(title, re) and len(title) > 5:
-                            # 获取链接
-                            href = element.get_attribute('href')
-                            if href and '/new/' in href:
-                                if href.startswith('/'):
-                                    full_url = f"https://www.newrank.cn{href}"
-                                else:
-                                    full_url = href
-                            else:
-                                full_url = 'https://www.newrank.cn'
-                            
-                            all_titles.append({
-                                'title': title,
-                                'url': full_url
-                            })
-                            print(f"✅ 选择器 '{selector}' 找到: {title}")
-                except Exception as e:
-                    continue
-            
-            # 去重并取前10个
-            seen = set()
-            for title_info in all_titles:
-                title = title_info['title']
-                if title not in seen:
-                    seen.add(title)
-                    newrank_list.append(title_info)
-                    if len(newrank_list) >= 10:
-                        break
-            
-            # 方法2：如果方法1不够，使用表格行分析
-            if len(newrank_list) < 10:
-                print(f"方法2：使用表格行分析补充，还需要 {10 - len(newrank_list)} 条...")
-                
-                # 查找表格
-                table_selectors = ['.ant-table-tbody', 'table tbody', '[class*="table"]']
-                table_body = None
-                for selector in table_selectors:
-                    table_body = page.query_selector(selector)
-                    if table_body:
-                        table_text = table_body.inner_text()
-                        if any(keyword in table_text for keyword in ['阅读数', '点赞数', '转发数']):
-                            print(f"找到榜单表格: {selector}")
-                            break
-                        else:
-                            table_body = None
-                
+            # 查找表格
+            table_selectors = ['.ant-table-tbody', 'table tbody', '[class*="table"]']
+            table_body = None
+            for selector in table_selectors:
+                table_body = page.query_selector(selector)
                 if table_body:
-                    rows = table_body.query_selector_all('tr')
-                    print(f"表格中有 {len(rows)} 行")
+                    table_text = table_body.inner_text()
+                    if any(keyword in table_text for keyword in ['阅读数', '点赞数', '转发数']):
+                        print(f"找到榜单表格: {selector}")
+                        break
+                    else:
+                        table_body = None
+            
+            if table_body:
+                rows = table_body.query_selector_all('tr')
+                print(f"表格中有 {len(rows)} 行")
+                
+                # 只处理前10行，确保不越界
+                for i in range(min(10, len(rows))):
+                    row = rows[i]
                     
-                    for i, row in enumerate(rows[:15]):
-                        if len(newrank_list) >= 10:
-                            break
-                            
-                        try:
-                            # 获取整行文本分析结构
-                            row_text = row.inner_text()
-                            lines = [line.strip() for line in row_text.split('\n') if line.strip()]
-                            
-                            if len(lines) >= 3:
-                                # 分析行结构：第一元素通常是排名，第二元素是标题
-                                # 跳过纯数字的排名行
-                                if not re.match(r'^\d+$', lines[0]):
+                    try:
+                        # 获取整行文本
+                        row_text = row.inner_text()
+                        lines = [line.strip() for line in row_text.split('\n') if line.strip()]
+                        
+                        print(f"第{i+1}行内容: {lines}")
+                        
+                        # 分析行结构，寻找标题
+                        title_found = False
+                        
+                        # 策略1：查找包含链接的标题元素
+                        title_links = row.query_selector_all('a[href*="/new/"]')
+                        for link in title_links:
+                            title = link.inner_text().strip()
+                            if _is_valid_title(title, re):
+                                newrank_list.append({
+                                    'title': title,
+                                    'url': 'https://www.newrank.cn'
+                                })
+                                print(f"✅ 链接提取第{i+1}条: {title}")
+                                title_found = True
+                                break
+                        
+                        if not title_found:
+                            # 策略2：分析文本行，找到最可能是标题的行
+                            for j, line in enumerate(lines):
+                                # 跳过排名数字和明显不是标题的行
+                                if (re.match(r'^\d+$', line) or 
+                                    any(keyword in line for keyword in ['粉丝数', '发布于', '阅读数', '点赞数', '转发数', '收藏', '更多'])):
                                     continue
                                 
-                                # 在行中寻找最可能是标题的文本
-                                for j, line in enumerate(lines[1:], 1):  # 从第二行开始
-                                    if (_is_valid_title(line, re) and 
-                                        line not in seen and
-                                        len(line) > 10):
-                                        
-                                        seen.add(line)
-                                        newrank_list.append({
-                                            'title': line,
-                                            'url': 'https://www.newrank.cn'
-                                        })
-                                        print(f"✅ 表格行第{len(newrank_list)}条: {line}")
-                                        break
-                                        
-                        except Exception as e:
-                            continue
+                                # 检查是否是有效的标题
+                                if (_is_valid_title(line, re) and 
+                                    len(line) > 10 and 
+                                    not title_found):
+                                    
+                                    newrank_list.append({
+                                        'title': line,
+                                        'url': 'https://www.newrank.cn'
+                                    })
+                                    print(f"✅ 文本提取第{i+1}条: {line}")
+                                    title_found = True
+                                    break
+                        
+                        # 策略3：如果还没找到，使用更宽松的规则
+                        if not title_found and len(lines) >= 2:
+                            for j, line in enumerate(lines):
+                                if (len(line) > 15 and 
+                                    any(char in line for char in ['：', '！', '？', '…', '，', '。']) and
+                                    any('\u4e00' <= char <= '\u9fff' for char in line) and
+                                    not any(keyword in line for keyword in ['粉丝数', '发布于'])):
+                                    
+                                    newrank_list.append({
+                                        'title': line,
+                                        'url': 'https://www.newrank.cn'
+                                    })
+                                    print(f"✅ 宽松提取第{i+1}条: {line}")
+                                    title_found = True
+                                    break
+                                
+                    except Exception as e:
+                        print(f"处理第{i+1}行时出错: {e}")
+                        # 如果这一行处理失败，添加一个占位符
+                        newrank_list.append({
+                            'title': f'第{i+1}条标题提取失败',
+                            'url': 'https://www.newrank.cn'
+                        })
+                        continue
             
-            # 方法3：如果还不够，使用页面文本的精确分析
-            if len(newrank_list) < 10:
-                print(f"方法3：使用页面文本精确分析补充...")
+            # 方法2：如果表格方法提取的数量不对，使用备用方法
+            if len(newrank_list) != 10:
+                print(f"方法2：表格方法提取了 {len(newrank_list)} 条，使用备用方法...")
                 
+                # 重新使用文本分析方法
                 page_text = page.inner_text('body')
                 lines = [line.strip() for line in page_text.split('\n') if line.strip()]
                 
@@ -272,31 +266,34 @@ def get_newrank_low_fans():
                         break
                 
                 if start_index != -1:
-                    # 从榜单开始位置分析前15行
-                    for i in range(start_index + 1, min(start_index + 50, len(lines))):
-                        if len(newrank_list) >= 10:
-                            break
-                            
+                    newrank_list = []  # 重置
+                    current_rank = 1
+                    i = start_index + 1
+                    
+                    while i < len(lines) and current_rank <= 10:
                         line = lines[i]
+                        
                         # 检查是否是排名数字
                         if re.match(r'^\d+$', line):
                             rank = int(line)
-                            if 1 <= rank <= 15:
-                                # 在接下来的几行中找标题
-                                for j in range(i+1, min(i+5, len(lines))):
+                            if rank == current_rank:
+                                # 在接下来的3行中找标题
+                                for j in range(i+1, min(i+4, len(lines))):
                                     potential_title = lines[j]
-                                    if (_is_valid_title(potential_title, re) and 
-                                        potential_title not in seen and
-                                        len(potential_title) > 10):
+                                    if (_is_valid_title(potential_title, re) and
+                                        len(potential_title) > 10 and
+                                        not any(keyword in potential_title for keyword in ['粉丝数', '发布于'])):
                                         
-                                        seen.add(potential_title)
                                         newrank_list.append({
                                             'title': potential_title,
                                             'url': 'https://www.newrank.cn'
                                         })
-                                        print(f"✅ 文本分析排名{rank}第{len(newrank_list)}条: {potential_title}")
+                                        print(f"✅ 备用方法排名{current_rank}条: {potential_title}")
+                                        current_rank += 1
                                         i = j
                                         break
+                        
+                        i += 1
             
             browser.close()
         
