@@ -99,7 +99,7 @@ def get_zhihu_hot():
         }]
 
 def get_newrank_low_fans():
-    """抓取新榜低粉爆文榜TOP10 - 智能分析版"""
+    """抓取新榜低粉爆文榜TOP10 - 修复版"""
     try:
         from playwright.sync_api import sync_playwright
         import os
@@ -156,42 +156,54 @@ def get_newrank_low_fans():
             print("等待榜单数据加载...")
             page.wait_for_timeout(15000)
             
-            # 方法1：分析页面结构，识别数据行模式
-            print("方法1：分析数据行模式...")
-            
             # 获取整个页面文本进行分析
             page_text = page.inner_text('body')
             lines = [line.strip() for line in page_text.split('\n') if line.strip()]
             
             print(f"页面共 {len(lines)} 行文本")
             
+            # 调试：打印前50行看看结构
+            print("=== 前50行文本 ===")
+            for i, line in enumerate(lines[:50]):
+                print(f"{i}: {line}")
+            print("=================")
+            
             seen_titles = set()
             count = 0
             
-            # 分析文本模式：标题通常出现在排名数字之后，在作者名之前
+            # 方法1：基于排名数字的模式识别
+            print("方法1：基于排名数字的模式识别...")
             i = 0
             while i < len(lines) and count < 10:
                 line = lines[i]
                 
                 # 检查是否是排名数字（1-50之间的单个数字）
                 if re.match(r'^(1?[0-9]|2[0-9]|3[0-9]|4[0-9]|50)$', line):
-                    # 找到排名数字，接下来寻找标题
                     rank_num = int(line)
                     if 1 <= rank_num <= 50:
-                        # 在接下来的几行中寻找标题
-                        for j in range(i+1, min(i+10, len(lines))):
+                        print(f"找到排名数字: {rank_num}")
+                        
+                        # 在接下来的5行中寻找标题
+                        for j in range(i+1, min(i+6, len(lines))):
                             potential_title = lines[j]
                             
-                            # 标题特征分析
-                            if self._is_valid_title(potential_title, lines, j):
-                                # 验证：下一行不能是作者特征
-                                author_checked = True
+                            if _is_valid_title(potential_title):
+                                # 进一步验证：检查上下文
+                                is_valid = True
+                                
+                                # 检查下一行是否是作者信息
                                 if j + 1 < len(lines):
                                     next_line = lines[j + 1]
-                                    if self._is_author_line(next_line):
-                                        author_checked = False
+                                    if _is_author_line(next_line):
+                                        is_valid = False
                                 
-                                if author_checked and potential_title not in seen_titles:
+                                # 检查前一行是否包含排除关键词
+                                if j > 0:
+                                    prev_line = lines[j - 1]
+                                    if any(keyword in prev_line for keyword in ['收藏', '更多', '阅读数']):
+                                        is_valid = False
+                                
+                                if is_valid and potential_title not in seen_titles:
                                     clean_title = re.sub(r'\s+', ' ', potential_title)
                                     seen_titles.add(clean_title)
                                     newrank_list.append({
@@ -205,32 +217,39 @@ def get_newrank_low_fans():
                 
                 i += 1
             
-            # 方法2：如果方法1不够，使用频率分析
+            # 方法2：如果还不够，使用简单的标题特征识别
             if count < 10:
-                print("方法2：使用频率分析...")
+                print("方法2：使用标题特征识别...")
                 
-                # 统计每行文本的出现特征
-                line_scores = []
                 for i, line in enumerate(lines):
-                    score = self._score_line_as_title(line, lines, i)
-                    if score > 0:
-                        line_scores.append((line, score, i))
-                
-                # 按分数排序，取前10个
-                line_scores.sort(key=lambda x: x[1], reverse=True)
-                
-                for line, score, idx in line_scores:
                     if count >= 10:
                         break
-                    if line not in seen_titles:
-                        clean_title = re.sub(r'\s+', ' ', line)
-                        seen_titles.add(clean_title)
-                        newrank_list.append({
-                            'title': clean_title,
-                            'url': 'https://www.newrank.cn'
-                        })
-                        count += 1
-                        print(f"✅ 频率分析第{count}条: {clean_title} (分数: {score})")
+                    
+                    if _is_valid_title(line) and line not in seen_titles:
+                        # 检查上下文
+                        context_ok = True
+                        
+                        # 检查下一行
+                        if i + 1 < len(lines):
+                            next_line = lines[i + 1]
+                            if _is_author_line(next_line) or any(keyword in next_line for keyword in ['粉丝数', '发布于']):
+                                context_ok = False
+                        
+                        # 检查前一行
+                        if i > 0:
+                            prev_line = lines[i - 1]
+                            if any(keyword in prev_line for keyword in ['收藏', '更多']):
+                                context_ok = False
+                        
+                        if context_ok:
+                            clean_title = re.sub(r'\s+', ' ', line)
+                            seen_titles.add(clean_title)
+                            newrank_list.append({
+                                'title': clean_title,
+                                'url': 'https://www.newrank.cn'
+                            })
+                            count += 1
+                            print(f"✅ 特征识别第{count}条: {clean_title}")
             
             browser.close()
         
@@ -239,12 +258,14 @@ def get_newrank_low_fans():
         
     except Exception as e:
         print(f"获取新榜低粉爆文榜出错: {e}")
+        import traceback
+        print(f"详细错误: {traceback.format_exc()}")
         return [{
             'title': '⚠️ 新榜低粉爆文榜获取失败',
             'url': 'https://www.newrank.cn/hotInfo?platform=GZH&rankType=3'
         }]
 
-def _is_valid_title(self, line, all_lines, index):
+def _is_valid_title(line):
     """判断一行文本是否是有效的文章标题"""
     # 基本长度检查
     if len(line) < 10 or len(line) > 100:
@@ -266,13 +287,6 @@ def _is_valid_title(self, line, all_lines, index):
         if re.match(pattern, line):
             return False
     
-    # 检查上下文：标题不应该出现在某些模式之后
-    if index > 0:
-        prev_line = all_lines[index - 1]
-        # 如果前一行是明显的结束标志，这一行不太可能是标题
-        if any(keyword in prev_line for keyword in ['收藏', '更多', '阅读数']):
-            return False
-    
     # 标题通常包含标点符号
     has_punctuation = any(char in line for char in ['：', '！', '？', '…', '，', '。', '"', '“', '”', '.', '|', '『', '』', '《', '》'])
     
@@ -281,46 +295,13 @@ def _is_valid_title(self, line, all_lines, index):
     
     return has_punctuation and not has_stats
 
-def _is_author_line(self, line):
+def _is_author_line(line):
     """判断是否是作者行"""
     author_indicators = ['粉丝数', '发布于', '星即理', '再见游戏', '抱雪斋文字考古学']
-    return any(indicator in line for indicator in author_indicators) or re.search(r'粉丝数\d+', line)
+    return (any(indicator in line for indicator in author_indicators) or 
+            re.search(r'粉丝数\d+', line) or
+            re.search(r'发布于\d{4}-\d{2}-\d{2}', line))
 
-def _score_line_as_title(self, line, all_lines, index):
-    """给一行文本打分，判断它作为标题的可能性"""
-    score = 0
-    
-    # 基本长度分数
-    if 15 <= len(line) <= 80:
-        score += 3
-    elif 10 <= len(line) <= 100:
-        score += 1
-    
-    # 中文内容分数
-    chinese_chars = sum(1 for char in line if '\u4e00' <= char <= '\u9fff')
-    if chinese_chars >= 5:
-        score += 2
-    
-    # 标点符号分数
-    punctuation_chars = sum(1 for char in line if char in '：！？…，。""‘’『』《》')
-    if punctuation_chars >= 1:
-        score += 2
-    
-    # 排除扣分项
-    if any(keyword in line for keyword in ['粉丝数', '发布于', '阅读数', '点赞数', '转发数']):
-        score -= 10
-    
-    if re.search(r'\d+[万wW]', line):  # 包含统计数字
-        score -= 5
-    
-    # 上下文分析
-    if index > 0:
-        prev_line = all_lines[index - 1]
-        if re.match(r'^\d+$', prev_line):  # 前一行是排名数字
-            score += 5
-    
-    return max(0, score)
-        
 def send_to_feishu(weibo_data, zhihu_data, newrank_data):
     """发送消息到飞书"""
     text_content = "🌐 每日热点速递\n\n"
