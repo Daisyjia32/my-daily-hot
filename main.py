@@ -99,7 +99,7 @@ def get_zhihu_hot():
         }]
 
 def get_newrank_low_fans():
-    """抓取新榜低粉爆文榜TOP10 - 精准定位版"""
+    """抓取新榜低粉爆文榜TOP10 - 修复顺序问题"""
     try:
         from playwright.sync_api import sync_playwright
         import os
@@ -156,81 +156,114 @@ def get_newrank_low_fans():
             print("等待榜单数据加载...")
             page.wait_for_timeout(15000)
             
-            # 方法1：先定位榜单表格区域，再提取数据
-            print("方法1：定位榜单表格区域...")
+            # 方法1：直接使用更精确的选择器提取标题
+            print("方法1：使用精确选择器提取标题...")
             
-            # 查找包含"阅读数"、"点赞数"等关键词的表格区域
-            table_selectors = [
-                '.ant-table-tbody',
-                'table tbody',
-                '[class*="table"]',
-                '[class*="tbody"]'
+            # 尝试多种可能的选择器
+            title_selectors = [
+                '[class*="title"]',
+                '.ant-table-cell a',
+                'tr td:nth-child(2)',  # 第二列通常是标题
+                'tr .title-text',
+                'tr a[href*="/new/"]'
             ]
             
-            table_body = None
-            for selector in table_selectors:
-                table_body = page.query_selector(selector)
-                if table_body:
-                    table_text = table_body.inner_text()
-                    if any(keyword in table_text for keyword in ['阅读数', '点赞数', '转发数']):
-                        print(f"找到榜单表格区域: {selector}")
-                        break
-                    else:
-                        table_body = None
-            
-            if table_body:
-                # 从表格区域提取数据
-                rows = table_body.query_selector_all('tr')
-                print(f"在表格区域找到 {len(rows)} 行数据")
-                
-                for i, row in enumerate(rows[:15]):  # 多取几行以防万一
-                    try:
-                        # 获取整行文本
-                        row_text = row.inner_text()
-                        lines = [line.strip() for line in row_text.split('\n') if line.strip()]
-                        
-                        # 分析行结构：应该包含排名、标题、作者、数据等信息
-                        if len(lines) >= 4:  # 至少包含排名、标题、作者、数据
-                            # 第一行通常是排名和标题的组合
-                            first_line = lines[0]
-                            
-                            # 提取标题：通常是第一行中排名数字之后的部分
-                            title_match = re.match(r'^\d+\s*(.+)', first_line)
-                            if title_match:
-                                title = title_match.group(1).strip()
+            all_titles = []
+            for selector in title_selectors:
+                try:
+                    elements = page.query_selector_all(selector)
+                    for element in elements:
+                        title = element.inner_text().strip()
+                        if _is_valid_title(title, re) and len(title) > 5:
+                            # 获取链接
+                            href = element.get_attribute('href')
+                            if href and '/new/' in href:
+                                if href.startswith('/'):
+                                    full_url = f"https://www.newrank.cn{href}"
+                                else:
+                                    full_url = href
                             else:
-                                # 如果没有匹配到排名数字，尝试第二行作为标题
-                                title = lines[1] if len(lines) > 1 else first_line
+                                full_url = 'https://www.newrank.cn'
                             
-                            # 验证标题
-                            if _is_valid_title(title, re) and len(newrank_list) < 10:
-                                # 进一步验证：检查行中是否包含阅读数等数据
-                                has_stats = any(any(keyword in line for keyword in ['阅读数', '点赞数', '转发数', '收藏']) for line in lines)
-                                
-                                if has_stats:
-                                    clean_title = re.sub(r'\s+', ' ', title)
-                                    newrank_list.append({
-                                        'title': clean_title,
-                                        'url': 'https://www.newrank.cn'
-                                    })
-                                    print(f"✅ 表格提取第{len(newrank_list)}条: {clean_title}")
-                                    
-                    except Exception as e:
-                        print(f"处理第{i}行时出错: {e}")
-                        continue
+                            all_titles.append({
+                                'title': title,
+                                'url': full_url
+                            })
+                            print(f"✅ 选择器 '{selector}' 找到: {title}")
+                except Exception as e:
+                    continue
             
-            # 方法2：如果表格方法失败，使用改进的文本分析方法
+            # 去重并取前10个
+            seen = set()
+            for title_info in all_titles:
+                title = title_info['title']
+                if title not in seen:
+                    seen.add(title)
+                    newrank_list.append(title_info)
+                    if len(newrank_list) >= 10:
+                        break
+            
+            # 方法2：如果方法1不够，使用表格行分析
             if len(newrank_list) < 10:
-                print("方法2：使用改进的文本分析方法...")
+                print(f"方法2：使用表格行分析补充，还需要 {10 - len(newrank_list)} 条...")
                 
-                # 获取整个页面文本进行分析
+                # 查找表格
+                table_selectors = ['.ant-table-tbody', 'table tbody', '[class*="table"]']
+                table_body = None
+                for selector in table_selectors:
+                    table_body = page.query_selector(selector)
+                    if table_body:
+                        table_text = table_body.inner_text()
+                        if any(keyword in table_text for keyword in ['阅读数', '点赞数', '转发数']):
+                            print(f"找到榜单表格: {selector}")
+                            break
+                        else:
+                            table_body = None
+                
+                if table_body:
+                    rows = table_body.query_selector_all('tr')
+                    print(f"表格中有 {len(rows)} 行")
+                    
+                    for i, row in enumerate(rows[:15]):
+                        if len(newrank_list) >= 10:
+                            break
+                            
+                        try:
+                            # 获取整行文本分析结构
+                            row_text = row.inner_text()
+                            lines = [line.strip() for line in row_text.split('\n') if line.strip()]
+                            
+                            if len(lines) >= 3:
+                                # 分析行结构：第一元素通常是排名，第二元素是标题
+                                # 跳过纯数字的排名行
+                                if not re.match(r'^\d+$', lines[0]):
+                                    continue
+                                
+                                # 在行中寻找最可能是标题的文本
+                                for j, line in enumerate(lines[1:], 1):  # 从第二行开始
+                                    if (_is_valid_title(line, re) and 
+                                        line not in seen and
+                                        len(line) > 10):
+                                        
+                                        seen.add(line)
+                                        newrank_list.append({
+                                            'title': line,
+                                            'url': 'https://www.newrank.cn'
+                                        })
+                                        print(f"✅ 表格行第{len(newrank_list)}条: {line}")
+                                        break
+                                        
+                        except Exception as e:
+                            continue
+            
+            # 方法3：如果还不够，使用页面文本的精确分析
+            if len(newrank_list) < 10:
+                print(f"方法3：使用页面文本精确分析补充...")
+                
                 page_text = page.inner_text('body')
                 lines = [line.strip() for line in page_text.split('\n') if line.strip()]
                 
-                seen_titles = set()
-                count = len(newrank_list)
-                
-                # 寻找包含"阅读数"关键词的区域，这通常是榜单开始的地方
+                # 找到榜单开始位置
                 start_index = -1
                 for i, line in enumerate(lines):
                     if '阅读数' in line and '点赞数' in line and '转发数' in line:
@@ -239,46 +272,31 @@ def get_newrank_low_fans():
                         break
                 
                 if start_index != -1:
-                    # 从榜单标题行开始分析
-                    i = start_index + 1
-                    current_rank = 1
-                    
-                    while i < len(lines) and count < 10:
+                    # 从榜单开始位置分析前15行
+                    for i in range(start_index + 1, min(start_index + 50, len(lines))):
+                        if len(newrank_list) >= 10:
+                            break
+                            
                         line = lines[i]
-                        
-                        # 检查是否是排名数字（严格的排名数字检查）
-                        if re.match(r'^(1?[0-9]|2[0-9]|3[0-9]|4[0-9]|50)$', line) and current_rank <= 10:
-                            rank_num = int(line)
-                            if rank_num == current_rank:
-                                # 找到正确排名的行，提取标题
-                                title_found = False
-                                
-                                # 在接下来的3行中寻找标题
-                                for j in range(i+1, min(i+4, len(lines))):
+                        # 检查是否是排名数字
+                        if re.match(r'^\d+$', line):
+                            rank = int(line)
+                            if 1 <= rank <= 15:
+                                # 在接下来的几行中找标题
+                                for j in range(i+1, min(i+5, len(lines))):
                                     potential_title = lines[j]
-                                    
                                     if (_is_valid_title(potential_title, re) and 
-                                        potential_title not in seen_titles and
-                                        not _is_author_line(potential_title, re)):
+                                        potential_title not in seen and
+                                        len(potential_title) > 10):
                                         
-                                        clean_title = re.sub(r'\s+', ' ', potential_title)
-                                        seen_titles.add(clean_title)
+                                        seen.add(potential_title)
                                         newrank_list.append({
-                                            'title': clean_title,
+                                            'title': potential_title,
                                             'url': 'https://www.newrank.cn'
                                         })
-                                        count += 1
-                                        print(f"✅ 精确排名{current_rank}第{count}条: {clean_title}")
-                                        title_found = True
+                                        print(f"✅ 文本分析排名{rank}第{len(newrank_list)}条: {potential_title}")
                                         i = j
-                                        current_rank += 1
                                         break
-                                
-                                if not title_found:
-                                    # 如果没找到标题，继续下一个排名
-                                    current_rank += 1
-                        
-                        i += 1
             
             browser.close()
         
@@ -317,7 +335,7 @@ def _is_valid_title(line, re_module):
             return False
     
     # 排除包含作者特征的行
-    author_indicators = ['粉丝数', '发布于', '星即理', '再见游戏', '抱雪斋文字考古学']
+    author_indicators = ['粉丝数', '发布于']
     if any(indicator in line for indicator in author_indicators):
         return False
     
@@ -328,13 +346,6 @@ def _is_valid_title(line, re_module):
     has_stats = bool(re_module.search(r'\d+[万wW]', line)) or bool(re_module.search(r'\d+\.\d+[万wW]?', line))
     
     return has_punctuation and not has_stats
-
-def _is_author_line(line, re_module):
-    """判断是否是作者行"""
-    author_indicators = ['粉丝数', '发布于', '星即理', '再见游戏', '抱雪斋文字考古学']
-    return (any(indicator in line for indicator in author_indicators) or 
-            re_module.search(r'粉丝数\d+', line) or
-            re_module.search(r'发布于\d{4}-\d{2}-\d{2}', line))
 
 def send_to_feishu(weibo_data, zhihu_data, newrank_data):
     """发送消息到飞书"""
