@@ -99,7 +99,7 @@ def get_zhihu_hot():
         }]
 
 def get_newrank_low_fans():
-    """抓取新榜低粉爆文榜TOP10 - 修复链接版本"""
+    """抓取新榜低粉爆文榜TOP10 - 最终链接优化版"""
     try:
         from playwright.sync_api import sync_playwright
         import os
@@ -144,31 +144,104 @@ def get_newrank_low_fans():
             # 宽松条件
             return (has_punctuation or len(line) > 8) and not has_stats
         
+        def _extract_wechat_url_from_captcha(captcha_url):
+            """从验证链接中提取真实的微信文章链接"""
+            try:
+                print(f"解析验证链接: {captcha_url}")
+                parsed_url = urllib.parse.urlparse(captcha_url)
+                query_params = urllib.parse.parse_qs(parsed_url.query)
+                
+                if 'target_url' in query_params:
+                    target_url = query_params['target_url'][0]
+                    # URL解码
+                    real_url = urllib.parse.unquote(target_url)
+                    print(f"✅ 提取到真实链接: {real_url}")
+                    return real_url
+                return captcha_url
+            except Exception as e:
+                print(f"解析验证链接失败: {e}")
+                return captcha_url
+        
         def _get_article_url(row, page):
             """从行中提取真实的文章链接"""
             try:
                 print("开始提取文章链接...")
                 
-                # 方法1：查找包含文章链接的a标签（重点查找文章链接）
+                # 方法1：直接查找包含文章数据的属性
+                # 新榜通常在tr或td上存储文章数据
+                article_data = row.get_attribute('data-url') or row.get_attribute('data-link')
+                if article_data:
+                    print(f"✅ 从data属性找到链接: {article_data}")
+                    if 'mp.weixin.qq.com' in article_data:
+                        return _extract_wechat_url_from_captcha(article_data)
+                    return article_data
+                
+                # 方法2：查找所有可能的链接
                 all_links = row.query_selector_all('a')
+                article_candidates = []
+                
                 for link in all_links:
                     href = link.get_attribute('href')
                     text = link.inner_text().strip()
                     
-                    print(f"找到链接: 文本='{text}', href='{href}'")
+                    if not href:
+                        continue
                     
-                    # 如果是文章标题文本的链接，很可能是文章链接
-                    if (href and 
-                        text and 
-                        len(text) > 10 and 
-                        _is_valid_title(text, re) and
-                        '/new/' in href):
-                        
-                        # 这是文章链接，需要进一步处理获取真实地址
-                        print(f"识别为文章链接: {href}")
+                    print(f"检查链接: 文本='{text[:20]}...', href='{href}'")
+                    
+                    # 收集所有可能的文章链接
+                    if any(pattern in href for pattern in ['/new/', '/detail/', 'mp.weixin.qq.com']):
+                        article_candidates.append((href, text))
+                
+                # 优先处理看起来像文章标题的链接
+                for href, text in article_candidates:
+                    if _is_valid_title(text, re) and len(text) > 10:
+                        print(f"✅ 找到标题链接: {href}")
                         return _resolve_article_url(href, page)
                 
-                # 方法2：如果没找到，返回默认的新榜链接
+                # 如果没有标题链接，尝试第一个非作者链接
+                for href, text in article_candidates:
+                    if not any(keyword in text for keyword in ['粉丝数', '发布于']):
+                        print(f"✅ 尝试非作者链接: {href}")
+                        return _resolve_article_url(href, page)
+                
+                # 方法3：如果都没找到，尝试模拟点击标题区域
+                print("尝试通过点击获取链接...")
+                title_cells = row.query_selector_all('td:nth-child(2), [class*="title"]')
+                for cell in title_cells:
+                    try:
+                        # 保存当前URL
+                        original_url = page.url
+                        
+                        # 点击标题单元格
+                        cell.click()
+                        page.wait_for_timeout(3000)
+                        
+                        # 检查是否跳转
+                        current_url = page.url
+                        if current_url != original_url:
+                            print(f"✅ 通过点击获取链接: {current_url}")
+                            
+                            # 如果是微信链接，直接返回
+                            if 'mp.weixin.qq.com' in current_url:
+                                final_url = _extract_wechat_url_from_captcha(current_url)
+                                # 返回原页面
+                                page.goto(original_url, timeout=30000)
+                                page.wait_for_timeout(2000)
+                                return final_url
+                            else:
+                                # 返回原页面
+                                page.goto(original_url, timeout=30000)
+                                page.wait_for_timeout(2000)
+                                return current_url
+                        else:
+                            # 如果没跳转，返回原页面
+                            page.goto(original_url, timeout=30000)
+                    except Exception as e:
+                        print(f"点击尝试失败: {e}")
+                        continue
+                
+                print("❌ 未找到文章链接")
                 return "https://www.newrank.cn"
                 
             except Exception as e:
@@ -189,47 +262,44 @@ def get_newrank_low_fans():
                 # 在新标签页中打开文章页面
                 new_page = page.context.new_page()
                 new_page.goto(newrank_url, timeout=30000)
-                new_page.wait_for_timeout(5000)  # 等待页面加载
+                new_page.wait_for_timeout(5000)
                 
-                # 方法1：查找微信文章iframe
+                # 获取当前URL
+                current_url = new_page.url
+                print(f"解析后URL: {current_url}")
+                
+                # 如果是微信验证链接，提取真实URL
+                if 'wappoc_appmsgcaptcha' in current_url:
+                    real_url = _extract_wechat_url_from_captcha(current_url)
+                    new_page.close()
+                    return real_url
+                
+                # 如果是直接微信文章链接
+                if 'mp.weixin.qq.com/s?' in current_url:
+                    print(f"✅ 找到直接微信文章链接: {current_url}")
+                    new_page.close()
+                    return current_url
+                
+                # 查找微信iframe
                 wechat_iframe = new_page.query_selector('iframe[src*="mp.weixin.qq.com"]')
                 if wechat_iframe:
                     iframe_src = wechat_iframe.get_attribute('src')
-                    print(f"找到微信iframe: {iframe_src}")
+                    print(f"✅ 找到微信iframe: {iframe_src}")
                     new_page.close()
                     return iframe_src
                 
-                # 方法2：查找直接跳转到微信的链接
+                # 查找跳转按钮或链接
                 wechat_links = new_page.query_selector_all('a[href*="mp.weixin.qq.com"]')
                 for link in wechat_links:
                     href = link.get_attribute('href')
-                    if href and '/s?' in href:  # 确保是文章链接而不是公众号主页
-                        print(f"找到微信文章链接: {href}")
+                    if href and ('/s?' in href or 'wappoc_appmsgcaptcha' in href):
+                        print(f"✅ 找到微信跳转链接: {href}")
                         new_page.close()
-                        return href
+                        return _extract_wechat_url_from_captcha(href)
                 
-                # 方法3：查找包含文章内容的区域，看是否有跳转链接
-                content_areas = new_page.query_selector_all('[class*="content"], [class*="article"], [class*="post"]')
-                for area in content_areas:
-                    links = area.query_selector_all('a[href*="mp.weixin.qq.com"]')
-                    for link in links:
-                        href = link.get_attribute('href')
-                        if href and '/s?' in href:
-                            print(f"在内容区域找到微信文章链接: {href}")
-                            new_page.close()
-                            return href
-                
-                # 如果都没找到，返回当前页面URL（可能是新榜的阅读页）
-                current_url = new_page.url
-                print(f"未找到微信链接，返回当前页: {current_url}")
+                print(f"❌ 未找到微信链接，返回: {current_url}")
                 new_page.close()
-                
-                # 如果是新榜的阅读页，可以尝试构造微信链接
-                if '/new/detail/' in current_url:
-                    # 尝试从URL参数中提取信息构造微信链接
-                    return current_url
-                else:
-                    return "https://www.newrank.cn"
+                return current_url
                     
             except Exception as e:
                 print(f"解析文章链接失败: {e}")
@@ -251,7 +321,7 @@ def get_newrank_low_fans():
                 'url': 'https://www.newrank.cn/hotInfo?platform=GZH&rankType=3'
             }]
         
-        print("使用优化方法提取文章标题和链接...")
+        print("使用最终优化方法提取文章标题和链接...")
         
         with sync_playwright() as p:
             # 启动浏览器
@@ -282,7 +352,7 @@ def get_newrank_low_fans():
             page.goto('https://www.newrank.cn/', timeout=30000)
             context.add_cookies(cookies)
             
-            # 访问目标页面（添加时间戳避免缓存）
+            # 访问目标页面
             timestamp = int(time.time())
             target_url = f"https://www.newrank.cn/hotInfo?platform=GZH&rankType=3&t={timestamp}"
             print("访问低粉爆文榜页面...")
@@ -339,24 +409,7 @@ def get_newrank_low_fans():
                                 print(f"✅ 提取第{len(newrank_list)}条: {title}")
                                 print(f"   最终链接: {article_url}")
                             else:
-                                # 如果第二个位置不是标题，尝试其他位置
-                                for j, line in enumerate(lines):
-                                    if j == 0:  # 跳过排名数字
-                                        continue
-                                    if _is_valid_title(line, re):
-                                        # 获取真实的文章链接
-                                        print(f"正在为备选标题 '{line}' 提取链接...")
-                                        article_url = _get_article_url(row, page)
-                                        
-                                        newrank_list.append({
-                                            'title': line,
-                                            'url': article_url
-                                        })
-                                        print(f"✅ 备选提取第{len(newrank_list)}条: {line}")
-                                        print(f"   最终链接: {article_url}")
-                                        break
-                                else:
-                                    print(f"❌ 第{i+1}行未找到有效标题")
+                                print(f"❌ 标题验证失败: {title}")
                                 
                     except Exception as e:
                         print(f"处理第{i+1}行时出错: {e}")
@@ -382,14 +435,14 @@ def send_to_feishu(weibo_data, zhihu_data, newrank_data):
     
     # 微博部分
     if weibo_data and len(weibo_data) > 0:
-        text_content += "【🔥 微博热搜 TOP 10】——————————————————\n"
+        text_content += "【🔥 微博热搜 TOP 10】——————————————————————————\n"
         for i, item in enumerate(weibo_data, 1):
             text_content += f"{i}. {item['title']}\n   🔗 {item['url']}\n"
         text_content += "\n"
     
     # 知乎部分
     if zhihu_data and len(zhihu_data) > 0:
-        text_content += "【📚 知乎热榜 TOP 30】——————————————————\n"
+        text_content += "【📚 知乎热榜 TOP 30】——————————————————————————\n"
         for i, item in enumerate(zhihu_data, 1):
             text_content += f"{i}. {item['title']}\n"
             if 'zhihu.com' in item['url']:
@@ -398,7 +451,7 @@ def send_to_feishu(weibo_data, zhihu_data, newrank_data):
     
     # 新榜低粉爆文榜部分
     if newrank_data and len(newrank_data) > 0:
-        text_content += "【💥 新榜低粉爆文榜 TOP 10】——————————————————\n"
+        text_content += "【💥 新榜低粉爆文榜 TOP 10】——————————————————————————\n"
         for i, item in enumerate(newrank_data, 1):
             text_content += f"{i}. {item['title']}\n"
             if 'newrank.cn' in item['url']:
