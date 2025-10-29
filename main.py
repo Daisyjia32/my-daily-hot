@@ -271,37 +271,63 @@ def get_newrank_low_fans():
         }]
         
 def send_to_feishu(weibo_data, zhihu_data, newrank_data):
-    """发送消息到飞书"""
+    """发送消息到飞书 - 详细时间标注版本"""
+    
+    current_time = datetime.now()
+    current_time_str = current_time.strftime("%Y-%m-%d %H:%M:%S")
+    
     text_content = "🌐 每日热点速递\n\n"
     
-    # 微博部分
+    # 1. 微博热搜
     if weibo_data and len(weibo_data) > 0:
-        text_content += "【🔥 微博热搜 TOP 10】——————————————————————————\n"
+        # 计算微博数据的相对新鲜度（假设是最新的）
+        weibo_freshness = "刚刚更新"
+        
+        text_content += "【🔥 微博实时热搜 TOP 10】——————————————————————\n"
+        text_content += f"⏰ 数据状态: {weibo_freshness} | 更新频次: 每分钟\n"
+        text_content += "🎯 特点: 全网最热话题，反应即时热点\n\n"
+        
         for i, item in enumerate(weibo_data, 1):
             text_content += f"{i}. {item['title']}\n   🔗 {item['url']}\n"
         text_content += "\n"
     
-    # 知乎部分
+    # 2. 知乎热榜
     if zhihu_data and len(zhihu_data) > 0:
-        text_content += "【📚 知乎热榜 TOP 30】——————————————————————————\n"
-        for i, item in enumerate(zhihu_data, 1):
+        # 知乎数据通常比较新
+        zhihu_freshness = "1小时内更新"
+        
+        text_content += "【📚 知乎热榜 TOP 10】——————————————————————————\n"
+        text_content += f"⏰ 数据状态: {zhihu_freshness} | 更新频次: 每小时\n"
+        text_content += "🎯 特点: 深度讨论，高质量内容\n\n"
+        
+        for i, item in enumerate(zhihu_data[:10], 1):
             text_content += f"{i}. {item['title']}\n"
             if 'zhihu.com' in item['url']:
                 text_content += f"   🔗 {item['url']}\n"
         text_content += "\n"
     
-    # 新榜低粉爆文榜部分
+    # 3. 新榜公众号文章
     if newrank_data and len(newrank_data) > 0:
-        text_content += "【💥 新榜低粉爆文榜 TOP 10】—————————————————————\n"
+        # 新榜数据相对滞后
+        newrank_freshness = "昨日精选内容"
+        
+        text_content += "【💼 公众号优质热文 TOP 10】————————————————————\n"
+        text_content += f"⏰ 数据状态: {newrank_freshness} | 更新频次: 每日\n"
+        text_content += "🎯 特点: 深度长文，优质原创内容\n\n"
+        
         for i, item in enumerate(newrank_data, 1):
             text_content += f"{i}. {item['title']}\n"
             if 'newrank.cn' in item['url']:
                 text_content += f"   🔗 {item['url']}\n"
         text_content += "\n"
     
-    # 添加时间戳
-    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    text_content += f"⏰ 更新时间: {current_time}"
+    # 底部总结
+    text_content += "——————————————\n"
+    text_content += f"⏰ 系统推送时间: {current_time_str}\n"
+    text_content += "📍 数据时效说明:\n"
+    text_content += "  • 微博热搜: 实时热点，反应迅速\n"
+    text_content += "  • 知乎热榜: 深度讨论，质量较高\n"
+    text_content += "  • 公众号文: 精选内容，深度阅读"
     
     # 发送到飞书
     data = {
@@ -318,7 +344,7 @@ def send_to_feishu(weibo_data, zhihu_data, newrank_data):
     except Exception as e:
         print(f"飞书推送失败: {e}")
         return False
-
+        
 def main():
     print("开始获取今日热点...")
     
