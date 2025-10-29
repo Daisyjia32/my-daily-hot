@@ -99,11 +99,12 @@ def get_zhihu_hot():
         }]
 
 def get_newrank_low_fans():
-    """抓取新榜低粉爆文榜TOP10 - 修复函数定义问题"""
+    """抓取新榜低粉爆文榜TOP10 - 完整优化版"""
     try:
         from playwright.sync_api import sync_playwright
         import os
         import re
+        import time
         
         def _is_valid_title(line, re_module):
             """判断一行文本是否是有效的文章标题"""
@@ -142,6 +143,40 @@ def get_newrank_low_fans():
             # 宽松条件
             return (has_punctuation or len(line) > 8) and not has_stats
         
+        def _get_article_url(row, page):
+            """从行中提取真实的文章链接"""
+            try:
+                # 方法1：查找包含文章链接的a标签
+                article_links = row.query_selector_all('a[href*="/s?"], a[href*="mp.weixin"]')
+                for link in article_links:
+                    href = link.get_attribute('href')
+                    if href:
+                        if href.startswith('/'):
+                            return f"https://mp.weixin.qq.com{href}"
+                        elif href.startswith('http'):
+                            return href
+                        else:
+                            return f"https://mp.weixin.qq.com/{href}"
+                
+                # 方法2：查找新榜的跳转链接
+                newrank_links = row.query_selector_all('a[href*="/new/"]')
+                for link in newrank_links:
+                    href = link.get_attribute('href')
+                    if href:
+                        # 新榜的跳转链接，需要解析获取真实地址
+                        if not href.startswith('http'):
+                            href = f"https://www.newrank.cn{href}"
+                        
+                        # 简单处理：直接返回新榜链接，因为自动跳转比较复杂
+                        return href
+                
+                # 方法3：如果都找不到，返回默认链接
+                return "https://www.newrank.cn"
+                
+            except Exception as e:
+                print(f"提取链接失败: {e}")
+                return "https://www.newrank.cn"
+        
         print("开始抓取新榜低粉爆文榜...")
         newrank_list = []
         
@@ -154,7 +189,7 @@ def get_newrank_low_fans():
                 'url': 'https://www.newrank.cn/hotInfo?platform=GZH&rankType=3'
             }]
         
-        print("使用简化方法提取文章标题...")
+        print("使用优化方法提取文章标题和链接...")
         
         with sync_playwright() as p:
             # 启动浏览器
@@ -185,9 +220,11 @@ def get_newrank_low_fans():
             page.goto('https://www.newrank.cn/', timeout=30000)
             context.add_cookies(cookies)
             
-            # 访问目标页面
+            # 访问目标页面（添加时间戳避免缓存）
+            timestamp = int(time.time())
+            target_url = f"https://www.newrank.cn/hotInfo?platform=GZH&rankType=3&t={timestamp}"
             print("访问低粉爆文榜页面...")
-            page.goto('https://www.newrank.cn/hotInfo?platform=GZH&rankType=3', timeout=60000)
+            page.goto(target_url, timeout=60000)
             
             # 等待页面加载
             print("等待榜单数据加载...")
@@ -214,7 +251,7 @@ def get_newrank_low_fans():
                 print(f"表格中有 {len(rows)} 行")
                 
                 # 处理第3-12行（实际的数据行）
-                for i in range(2, min(12, len(rows))):  # 从索引2开始（第3行）到索引11（第12行）
+                for i in range(2, min(12, len(rows))):
                     row = rows[i]
                     
                     try:
@@ -226,26 +263,33 @@ def get_newrank_low_fans():
                         
                         # 在行中寻找标题：通常是第二个元素（索引1）
                         if len(lines) > 1:
-                            # 标题通常在第二个位置
                             title = lines[1]
                             
                             if _is_valid_title(title, re):
+                                # 获取真实的文章链接
+                                article_url = _get_article_url(row, page)
+                                
                                 newrank_list.append({
                                     'title': title,
-                                    'url': 'https://www.newrank.cn'
+                                    'url': article_url
                                 })
                                 print(f"✅ 提取第{len(newrank_list)}条: {title}")
+                                print(f"   链接: {article_url}")
                             else:
                                 # 如果第二个位置不是标题，尝试其他位置
                                 for j, line in enumerate(lines):
                                     if j == 0:  # 跳过排名数字
                                         continue
                                     if _is_valid_title(line, re):
+                                        # 获取真实的文章链接
+                                        article_url = _get_article_url(row, page)
+                                        
                                         newrank_list.append({
                                             'title': line,
-                                            'url': 'https://www.newrank.cn'
+                                            'url': article_url
                                         })
                                         print(f"✅ 备选提取第{len(newrank_list)}条: {line}")
+                                        print(f"   链接: {article_url}")
                                         break
                                 else:
                                     print(f"❌ 第{i+1}行未找到有效标题")
