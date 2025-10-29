@@ -99,7 +99,7 @@ def get_zhihu_hot():
         }]
 
 def get_newrank_low_fans():
-    """抓取新榜低粉爆文榜TOP10 - 修复版"""
+    """抓取新榜低粉爆文榜TOP10 - 修复导入问题"""
     try:
         from playwright.sync_api import sync_playwright
         import os
@@ -187,14 +187,14 @@ def get_newrank_low_fans():
                         for j in range(i+1, min(i+6, len(lines))):
                             potential_title = lines[j]
                             
-                            if _is_valid_title(potential_title):
+                            if _is_valid_title(potential_title, re):
                                 # 进一步验证：检查上下文
                                 is_valid = True
                                 
                                 # 检查下一行是否是作者信息
                                 if j + 1 < len(lines):
                                     next_line = lines[j + 1]
-                                    if _is_author_line(next_line):
+                                    if _is_author_line(next_line, re):
                                         is_valid = False
                                 
                                 # 检查前一行是否包含排除关键词
@@ -225,14 +225,14 @@ def get_newrank_low_fans():
                     if count >= 10:
                         break
                     
-                    if _is_valid_title(line) and line not in seen_titles:
+                    if _is_valid_title(line, re) and line not in seen_titles:
                         # 检查上下文
                         context_ok = True
                         
                         # 检查下一行
                         if i + 1 < len(lines):
                             next_line = lines[i + 1]
-                            if _is_author_line(next_line) or any(keyword in next_line for keyword in ['粉丝数', '发布于']):
+                            if _is_author_line(next_line, re) or any(keyword in next_line for keyword in ['粉丝数', '发布于']):
                                 context_ok = False
                         
                         # 检查前一行
@@ -265,7 +265,7 @@ def get_newrank_low_fans():
             'url': 'https://www.newrank.cn/hotInfo?platform=GZH&rankType=3'
         }]
 
-def _is_valid_title(line):
+def _is_valid_title(line, re_module):
     """判断一行文本是否是有效的文章标题"""
     # 基本长度检查
     if len(line) < 10 or len(line) > 100:
@@ -284,23 +284,23 @@ def _is_valid_title(line):
     ]
     
     for pattern in exclude_patterns:
-        if re.match(pattern, line):
+        if re_module.match(pattern, line):
             return False
     
     # 标题通常包含标点符号
     has_punctuation = any(char in line for char in ['：', '！', '？', '…', '，', '。', '"', '“', '”', '.', '|', '『', '』', '《', '》'])
     
     # 标题通常不包含统计数字模式
-    has_stats = bool(re.search(r'\d+[万wW]', line)) or bool(re.search(r'\d+\.\d+', line))
+    has_stats = bool(re_module.search(r'\d+[万wW]', line)) or bool(re_module.search(r'\d+\.\d+', line))
     
     return has_punctuation and not has_stats
 
-def _is_author_line(line):
+def _is_author_line(line, re_module):
     """判断是否是作者行"""
     author_indicators = ['粉丝数', '发布于', '星即理', '再见游戏', '抱雪斋文字考古学']
     return (any(indicator in line for indicator in author_indicators) or 
-            re.search(r'粉丝数\d+', line) or
-            re.search(r'发布于\d{4}-\d{2}-\d{2}', line))
+            re_module.search(r'粉丝数\d+', line) or
+            re_module.search(r'发布于\d{4}-\d{2}-\d{2}', line))
 
 def send_to_feishu(weibo_data, zhihu_data, newrank_data):
     """发送消息到飞书"""
