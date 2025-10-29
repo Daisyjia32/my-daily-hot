@@ -99,11 +99,48 @@ def get_zhihu_hot():
         }]
 
 def get_newrank_low_fans():
-    """抓取新榜低粉爆文榜TOP10 - 简化版本"""
+    """抓取新榜低粉爆文榜TOP10 - 修复函数定义问题"""
     try:
         from playwright.sync_api import sync_playwright
         import os
         import re
+        
+        def _is_valid_title(line, re_module):
+            """判断一行文本是否是有效的文章标题"""
+            # 基本长度检查
+            if len(line) < 6 or len(line) > 120:
+                return False
+            
+            # 必须包含中文
+            if not any('\u4e00' <= char <= '\u9fff' for char in line):
+                return False
+            
+            # 排除明显的非标题内容
+            exclude_patterns = [
+                r'^粉丝数', r'^发布于', r'^阅读数', r'^点赞数', r'^转发数',
+                r'^收藏', r'^更多', r'^登录', r'^注册', r'^新榜',
+                r'^头条', r'^原', r'^情感', r'^文摘', r'^科技', r'^美食',
+                r'^乐活', r'^职场',
+                r'^\d+$', r'^[0-9.,wW\+]+$', r'^http', r'^©', r'^首页'
+            ]
+            
+            for pattern in exclude_patterns:
+                if re_module.match(pattern, line):
+                    return False
+            
+            # 排除包含作者特征的行
+            author_indicators = ['粉丝数', '发布于', '深蓝画画', '故園柴扉', '茉怡说', '老田电脑', '胡言叨语', '催收圈', '阅享之', '爱穿裙子的长桑']
+            if any(indicator in line for indicator in author_indicators):
+                return False
+            
+            # 标题通常包含标点符号
+            has_punctuation = any(char in line for char in ['：', '！', '？', '…', '，', '。', '"', '“', '”', '.', '|', '『', '』', '《', '》', '——', '与'])
+            
+            # 标题通常不包含统计数字模式
+            has_stats = bool(re_module.search(r'\d+[万wW]', line)) or bool(re_module.search(r'\d+\.\d+[万wW]?', line))
+            
+            # 宽松条件
+            return (has_punctuation or len(line) > 8) and not has_stats
         
         print("开始抓取新榜低粉爆文榜...")
         newrank_list = []
@@ -176,8 +213,8 @@ def get_newrank_low_fans():
                 rows = table_body.query_selector_all('tr')
                 print(f"表格中有 {len(rows)} 行")
                 
-                # 处理前10行数据行（跳过表头）
-                for i in range(min(10, len(rows))):
+                # 处理第3-12行（实际的数据行）
+                for i in range(2, min(12, len(rows))):  # 从索引2开始（第3行）到索引11（第12行）
                     row = rows[i]
                     
                     try:
@@ -185,32 +222,33 @@ def get_newrank_low_fans():
                         row_text = row.inner_text()
                         lines = [line.strip() for line in row_text.split('\n') if line.strip()]
                         
-                        # 跳过表头和空行
-                        if len(lines) < 3 or '排名' in row_text:
-                            continue
-                            
                         print(f"第{i+1}行内容: {lines}")
                         
                         # 在行中寻找标题：通常是第二个元素（索引1）
                         if len(lines) > 1:
-                            # 尝试多个位置
-                            potential_titles = []
-                            if len(lines) >= 2:
-                                potential_titles.append(lines[1])  # 第二个元素
-                            if len(lines) >= 3:
-                                potential_titles.append(lines[2])  # 第三个元素
+                            # 标题通常在第二个位置
+                            title = lines[1]
                             
-                            for title in potential_titles:
-                                if _is_valid_title(title, re):
-                                    newrank_list.append({
-                                        'title': title,
-                                        'url': 'https://www.newrank.cn'
-                                    })
-                                    print(f"✅ 提取第{len(newrank_list)}条: {title}")
-                                    break
+                            if _is_valid_title(title, re):
+                                newrank_list.append({
+                                    'title': title,
+                                    'url': 'https://www.newrank.cn'
+                                })
+                                print(f"✅ 提取第{len(newrank_list)}条: {title}")
                             else:
-                                # 如果没找到，记录问题
-                                print(f"❌ 第{i+1}行未找到有效标题: {lines}")
+                                # 如果第二个位置不是标题，尝试其他位置
+                                for j, line in enumerate(lines):
+                                    if j == 0:  # 跳过排名数字
+                                        continue
+                                    if _is_valid_title(line, re):
+                                        newrank_list.append({
+                                            'title': line,
+                                            'url': 'https://www.newrank.cn'
+                                        })
+                                        print(f"✅ 备选提取第{len(newrank_list)}条: {line}")
+                                        break
+                                else:
+                                    print(f"❌ 第{i+1}行未找到有效标题")
                                 
                     except Exception as e:
                         print(f"处理第{i+1}行时出错: {e}")
@@ -229,21 +267,21 @@ def get_newrank_low_fans():
             'title': '⚠️ 新榜低粉爆文榜获取失败',
             'url': 'https://www.newrank.cn/hotInfo?platform=GZH&rankType=3'
         }]
-
+        
 def send_to_feishu(weibo_data, zhihu_data, newrank_data):
     """发送消息到飞书"""
     text_content = "🌐 每日热点速递\n\n"
     
     # 微博部分
     if weibo_data and len(weibo_data) > 0:
-        text_content += "【🔥 微博热搜 TOP 10】\n"
+        text_content += "【🔥 微博热搜 TOP 10】——————————————————\n"
         for i, item in enumerate(weibo_data, 1):
             text_content += f"{i}. {item['title']}\n   🔗 {item['url']}\n"
         text_content += "\n"
     
     # 知乎部分
     if zhihu_data and len(zhihu_data) > 0:
-        text_content += "【📚 知乎热榜 TOP 30】\n"
+        text_content += "【📚 知乎热榜 TOP 30】——————————————————\n"
         for i, item in enumerate(zhihu_data, 1):
             text_content += f"{i}. {item['title']}\n"
             if 'zhihu.com' in item['url']:
@@ -252,7 +290,7 @@ def send_to_feishu(weibo_data, zhihu_data, newrank_data):
     
     # 新榜低粉爆文榜部分
     if newrank_data and len(newrank_data) > 0:
-        text_content += "【💥 新榜低粉爆文榜 TOP 10】\n"
+        text_content += "【💥 新榜低粉爆文榜 TOP 10】——————————————————\n"
         for i, item in enumerate(newrank_data, 1):
             text_content += f"{i}. {item['title']}\n"
             if 'newrank.cn' in item['url']:
