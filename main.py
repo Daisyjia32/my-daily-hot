@@ -99,7 +99,7 @@ def get_zhihu_hot():
         }]
 
 def get_newrank_low_fans():
-    """抓取新榜低粉爆文榜TOP10 - 点击获取真实链接版"""
+    """抓取新榜低粉爆文榜TOP10 - 通用版本"""
     try:
         from playwright.sync_api import sync_playwright
         import os
@@ -117,7 +117,7 @@ def get_newrank_low_fans():
                 'url': 'https://www.newrank.cn/hotInfo?platform=GZH&rankType=3'
             }]
         
-        print("使用Playwright点击获取真实文章链接...")
+        print("使用Playwright通用方法提取文章标题...")
         
         with sync_playwright() as p:
             # 启动浏览器
@@ -153,120 +153,159 @@ def get_newrank_low_fans():
             print("等待榜单数据加载...")
             page.wait_for_timeout(8000)
             
-            # 策略：直接查找榜单中的文章标题并点击获取真实链接
-            print("查找榜单中的文章标题元素...")
+            # 策略：基于结构特征提取文章标题
+            print("基于结构特征提取文章标题...")
             
-            # 保存当前页面的URL（用于返回）
-            original_url = page.url
+            # 方法1：查找包含排名数字和文章标题的特定结构
+            print("方法1：查找排名和标题组合...")
             
-            # 查找所有可能包含文章标题的元素
-            all_elements = page.query_selector_all('*')
-            potential_titles = []
+            # 查找所有包含数字排名的元素
+            rank_elements = page.query_selector_all('[class*="rank"], [class*="index"], [class*="number"]')
+            print(f"找到 {len(rank_elements)} 个排名元素")
             
-            for element in all_elements:
-                try:
+            # 如果没有找到专门的排名元素，查找所有包含数字的元素
+            if not rank_elements:
+                all_elements = page.query_selector_all('*')
+                for element in all_elements:
                     text = element.inner_text().strip()
-                    # 匹配文章标题特征（基于陈道明那条的特征）
-                    if (len(text) > 15 and len(text) < 100 and
-                        any(char in text for char in ['：', '！', '，', '。', '？', '…']) and
-                        not any(keyword in text for keyword in [  # 排除非文章文本
-                            '登录', '注册', '首页', '新榜', '轻松', '账号', '找号', '社媒',
-                            '营销', '推广', '投放', '创作', '数据', '回采', '作品', '提供',
-                            '助力', '增值', '点击', '前往', '正式运营', '办公室'
-                        ]) and
-                        not re.match(r'^[0-9\.\s]*$', text)):  # 排除纯数字和点
-                        
-                        potential_titles.append({
-                            'text': text,
-                            'element': element
-                        })
-                except:
-                    continue
+                    if re.match(r'^\d+$', text) and len(text) < 3:  # 单个数字，可能是排名
+                        rank_elements.append(element)
+                print(f"备用方法找到 {len(rank_elements)} 个排名元素")
             
-            print(f"找到 {len(potential_titles)} 个可能的文章标题")
-            
-            # 显示前10个用于调试
-            for i, title in enumerate(potential_titles[:10]):
-                print(f"标题 {i+1}: {title['text']}")
-            
-            # 尝试点击这些标题来获取真实链接
             count = 0
             seen_titles = set()
             
-            for title_info in potential_titles:
+            # 对于每个排名元素，查找对应的标题
+            for rank_element in rank_elements:
                 if count >= 10:
                     break
                 
-                title = title_info['text']
-                element = title_info['element']
-                
-                if title in seen_titles:
-                    continue
-                seen_titles.add(title)
-                
                 try:
-                    # 点击标题元素
-                    print(f"尝试点击: {title}")
+                    rank_text = rank_element.inner_text().strip()
+                    if not rank_text.isdigit():
+                        continue
                     
-                    # 在新标签页中打开链接
-                    with page.expect_popup() as popup_info:
-                        element.click(button="middle")  # 中键点击在新标签页打开
+                    rank_num = int(rank_text)
+                    if rank_num < 1 or rank_num > 50:  # 合理的排名范围
+                        continue
                     
-                    popup = popup_info.value
-                    popup.wait_for_load_state()
-                    
-                    # 获取新标签页的URL
-                    popup_url = popup.url
-                    print(f"点击后跳转到: {popup_url}")
-                    
-                    # 检查是否是微信文章链接
-                    if 'mp.weixin.qq.com' in popup_url:
-                        # 这是真正的微信文章链接！
-                        newrank_list.append({
-                            'title': title,
-                            'url': popup_url
-                        })
-                        count += 1
-                        print(f"✅ 成功获取第{count}条: {title}")
-                        print(f"   真实链接: {popup_url}")
-                    
-                    # 关闭新标签页
-                    popup.close()
-                    
-                    # 等待一下再处理下一个
-                    page.wait_for_timeout(1000)
-                    
+                    # 在排名元素附近查找标题
+                    # 方法1：查找同一行或相邻元素的标题
+                    row_element = rank_element.evaluate_handle('(elem) => elem.closest("tr, div, li")')
+                    if row_element:
+                        row_text = row_element.as_element().inner_text()
+                        
+                        # 从行文本中提取标题
+                        lines = [line.strip() for line in row_text.split('\n') if line.strip()]
+                        
+                        for line in lines:
+                            # 标题特征：包含中文标点，长度合理，不包含指标关键词
+                            if (len(line) > 10 and len(line) < 100 and
+                                any(char in line for char in ['：', '！', '？', '…', '，', '。', '"', '“', '”']) and
+                                not any(keyword in line for keyword in ['粉丝数', '发布于', '阅读数', '点赞数', '转发数', '收藏', '更多', '登录', '注册']) and
+                                not re.match(r'^\d', line) and  # 不以数字开头
+                                not re.match(r'^[0-9Ww\+]+$', line)):  # 不是纯数字和W+
+                                
+                                # 清理标题
+                                clean_title = line.split('...')[0].split('…')[0].strip()
+                                
+                                if clean_title and clean_title not in seen_titles:
+                                    seen_titles.add(clean_title)
+                                    
+                                    # 查找链接
+                                    link_elem = row_element.evaluate_handle('(elem) => elem.querySelector("a")')
+                                    href = link_elem.get_attribute('href') if link_elem else ''
+                                    
+                                    if href and not href.startswith('http'):
+                                        full_url = f"https://www.newrank.cn{href}" if href.startswith('/') else f"https://www.newrank.cn/{href}"
+                                    else:
+                                        full_url = href if href else 'https://www.newrank.cn'
+                                    
+                                    newrank_list.append({
+                                        'title': clean_title,
+                                        'url': full_url
+                                    })
+                                    count += 1
+                                    print(f"✅ 排名{rank_num}第{count}条: {clean_title}")
+                                    break
+                                    
                 except Exception as e:
-                    print(f"点击失败: {e}")
                     continue
             
-            # 如果点击方法失败，使用备用方案：直接解析页面结构
-            if not newrank_list:
-                print("使用备用方案：直接解析页面结构...")
+            # 方法2：如果方法1不够，直接查找所有可能的标题
+            if count < 10:
+                print("方法2：直接查找所有标题...")
                 
-                # 查找包含排名和文章信息的特定结构
-                page_text = page.inner_text('body')
+                all_elements = page.query_selector_all('*')
+                potential_titles = []
                 
-                # 使用正则表达式匹配排名和标题
-                # 匹配模式：数字. 标题（直到粉丝数或阅读数）
-                pattern = r'(\d+)\.\s*([^…]+?…|[^…]+?)(?=\s+[^\s]+\s+粉丝数|\s+[0-9Ww\+]+\s*收藏|\s*$)'
-                matches = re.findall(pattern, page_text)
-                
-                print(f"正则匹配到 {len(matches)} 个文章标题")
-                
-                for rank, title in matches[:10]:
-                    title = title.strip()
-                    if len(title) > 5 and title not in seen_titles:
-                        seen_titles.add(title)
+                for element in all_elements:
+                    try:
+                        text = element.inner_text().strip()
                         
-                        # 对于匹配到的标题，我们只能提供新榜页面链接
-                        # 因为无法通过简单方法获取微信文章链接
+                        # 标题特征检测
+                        is_title = (
+                            len(text) > 15 and len(text) < 100 and
+                            any(char in text for char in ['：', '！', '？', '…', '，', '。']) and
+                            not any(keyword in text for keyword in ['粉丝数', '发布于', '阅读数', '点赞数', '转发数', '收藏', '更多', '登录', '注册', '新榜']) and
+                            not text.startswith('http') and
+                            not re.match(r'^\d+\.', text) and  # 不以数字加点开头
+                            ' ' not in text or len(text.split()) > 2  # 应该是连续文本
+                        )
+                        
+                        if is_title:
+                            # 进一步验证：检查是否在表格区域
+                            parent = element.evaluate_handle('(elem) => elem.closest("table, tr, .table, .list")')
+                            if parent:
+                                parent_text = parent.as_element().inner_text()
+                                if any(keyword in parent_text for keyword in ['阅读数', '粉丝数', '点赞数']):
+                                    potential_titles.append({
+                                        'text': text,
+                                        'element': element
+                                    })
+                                    
+                    except:
+                        continue
+                
+                print(f"找到 {len(potential_titles)} 个潜在标题")
+                
+                # 去重并取前10个
+                unique_titles = []
+                seen_texts = set()
+                
+                for title_info in potential_titles:
+                    text = title_info['text']
+                    text_key = text[:30]  # 前30字符去重
+                    
+                    if text_key not in seen_texts:
+                        seen_texts.add(text_key)
+                        unique_titles.append(title_info)
+                
+                for title_info in unique_titles:
+                    if count >= 10:
+                        break
+                    
+                    text = title_info['text']
+                    element = title_info['element']
+                    
+                    if text not in seen_titles:
+                        seen_titles.add(text)
+                        
+                        # 查找链接
+                        link_elem = element.query_selector('a')
+                        href = link_elem.get_attribute('href') if link_elem else ''
+                        
+                        if href and not href.startswith('http'):
+                            full_url = f"https://www.newrank.cn{href}" if href.startswith('/') else f"https://www.newrank.cn/{href}"
+                        else:
+                            full_url = href if href else 'https://www.newrank.cn'
+                        
                         newrank_list.append({
-                            'title': title,
-                            'url': original_url  # 使用原始页面链接
+                            'title': text,
+                            'url': full_url
                         })
                         count += 1
-                        print(f"✅ 备用方案第{count}条: {title}")
+                        print(f"✅ 直接提取第{count}条: {text}")
             
             browser.close()
         
@@ -274,7 +313,7 @@ def get_newrank_low_fans():
         
         if not newrank_list:
             return [{
-                'title': '⚠️ 无法获取文章数据',
+                'title': '⚠️ 无法识别页面结构',
                 'url': 'https://www.newrank.cn/hotInfo?platform=GZH&rankType=3'
             }]
         
