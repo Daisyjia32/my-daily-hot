@@ -2,9 +2,10 @@ name: Daily Hot News Push
 
 on:
   schedule:
-      # 设置多个触发时间确保执行
-    - cron: '0 2 * * *'   # 主要触发：UTC 02:00 = 北京时间 10:00
-    - cron: '30 2 * * *'  # 备用触发：UTC 02:30 = 北京时间 10:30
+        # 设置提前2小时，应对GitHub延迟
+    - cron: '0 0 * * *'   # 主要触发：UTC 00:00 = 北京时间 08:00
+    - cron: '30 0 * * *'  # 备用触发：UTC 00:30 = 北京时间 08:30
+    - cron: '0 1 * * *'   # 二次备用：UTC 01:00 = 北京时间 09:00
   workflow_dispatch: # 允许手动触发
 
 jobs:
